@@ -1,0 +1,1250 @@
+function resolveApiBase() {
+  const params = new URLSearchParams(window.location.search);
+  const fromQuery = (params.get("api") || "").trim();
+  const fromStorage = (localStorage.getItem("asseri_api_base") || "").trim();
+  const fromWindow = (window.APP_API_BASE || "").trim();
+  const chosen = fromQuery || fromStorage || fromWindow;
+  if (chosen) {
+    localStorage.setItem("asseri_api_base", chosen);
+  }
+  return chosen.replace(/\/+$/, "");
+}
+
+const API_BASE = resolveApiBase();
+const AUTH_TOKEN_KEY = "asseri_auth_token";
+const AUTH_USER_KEY = "asseri_auth_user";
+const DRAFT_KEY_PREFIX = "asseri_draft_";
+
+function apiUrl(path) {
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  if (!API_BASE) {
+    return path;
+  }
+  return `${API_BASE}${path}`;
+}
+
+const api = {
+  async json(url, options = {}) {
+    const response = await fetch(apiUrl(url), options);
+    const raw = await response.text();
+    let payload = {};
+    if (raw.trim()) {
+      try {
+        payload = JSON.parse(raw);
+      } catch (_error) {
+        payload = { detail: raw.slice(0, 500) };
+      }
+    }
+    if (!response.ok) {
+      throw new Error(payload.detail || payload.error || `Request failed (${response.status})`);
+    }
+    return payload;
+  },
+};
+
+const state = {
+  authToken: null,
+  userId: null,
+  sessionId: null,
+  sessions: [],
+  lastAssistantTopic: null,
+  messageCounter: 0,
+  sessionTags: [],
+  sessionPins: [],
+};
+
+const ui = {
+  sessionsList: document.getElementById("sessionsList"),
+  messages: document.getElementById("messages"),
+  chatForm: document.getElementById("chatForm"),
+  messageInput: document.getElementById("messageInput"),
+  statusText: document.getElementById("statusText"),
+  chatTitle: document.getElementById("chatTitle"),
+  newSessionBtn: document.getElementById("newSessionBtn"),
+  loadingRow: document.getElementById("loadingRow"),
+  authForm: document.getElementById("authForm"),
+  authUsername: document.getElementById("authUsername"),
+  authPassword: document.getElementById("authPassword"),
+  signUpBtn: document.getElementById("signUpBtn"),
+  signOutBtn: document.getElementById("signOutBtn"),
+  authState: document.getElementById("authState"),
+  authBadge: document.getElementById("authBadge"),
+  continueBtn: document.getElementById("continueBtn"),
+  regenerateBtn: document.getElementById("regenerateBtn"),
+  exportBtn: document.getElementById("exportBtn"),
+  deleteSessionBtn: document.getElementById("deleteSessionBtn"),
+  profileBtn: document.getElementById("profileBtn"),
+  pinsBtn: document.getElementById("pinsBtn"),
+  tagsBtn: document.getElementById("tagsBtn"),
+  searchInput: document.getElementById("searchInput"),
+  searchBtn: document.getElementById("searchBtn"),
+};
+ui.chatSendBtn = ui.chatForm ? ui.chatForm.querySelector("button[type='submit']") : null;
+
+function setStatus(text) {
+  ui.statusText.textContent = text;
+}
+
+function setLoading(flag) {
+  ui.loadingRow.classList.toggle("hidden", !flag);
+}
+
+function setStoredAuth(token, userId) {
+  if (token) {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+  } else {
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+  }
+  if (userId) {
+    localStorage.setItem(AUTH_USER_KEY, userId);
+  } else {
+    localStorage.removeItem(AUTH_USER_KEY);
+  }
+}
+
+function authHeaders(extra = {}) {
+  const headers = { ...extra };
+  if (state.authToken) {
+    headers.Authorization = `Bearer ${state.authToken}`;
+  }
+  return headers;
+}
+
+function setChatEnabled(flag) {
+  if (ui.newSessionBtn) ui.newSessionBtn.disabled = !flag;
+  if (ui.messageInput) ui.messageInput.disabled = !flag;
+  if (ui.continueBtn) ui.continueBtn.disabled = !flag;
+  if (ui.regenerateBtn) ui.regenerateBtn.disabled = !flag;
+  if (ui.exportBtn) ui.exportBtn.disabled = !flag;
+  if (ui.deleteSessionBtn) ui.deleteSessionBtn.disabled = !flag;
+  if (ui.profileBtn) ui.profileBtn.disabled = !flag;
+  if (ui.pinsBtn) ui.pinsBtn.disabled = !flag;
+  if (ui.tagsBtn) ui.tagsBtn.disabled = !flag;
+  if (ui.searchInput) ui.searchInput.disabled = !flag;
+  if (ui.searchBtn) ui.searchBtn.disabled = !flag;
+  if (ui.chatSendBtn) {
+    ui.chatSendBtn.disabled = !flag;
+  }
+}
+
+function setAuthUI(isSignedIn) {
+  if (isSignedIn && state.userId) {
+    ui.authState.textContent = `Signed in as ${state.userId}`;
+    ui.authBadge.textContent = state.userId;
+    ui.signOutBtn.classList.remove("hidden");
+    ui.signUpBtn.classList.add("hidden");
+    ui.authUsername.value = state.userId;
+    ui.authUsername.disabled = true;
+    ui.authPassword.value = "";
+    ui.authPassword.disabled = true;
+    setChatEnabled(true);
+  } else {
+    ui.authState.textContent = "Signed out";
+    ui.authBadge.textContent = "Signed out";
+    ui.signOutBtn.classList.add("hidden");
+    ui.signUpBtn.classList.remove("hidden");
+    ui.authUsername.disabled = false;
+    ui.authPassword.disabled = false;
+    setChatEnabled(false);
+  }
+}
+
+function clearMessages() {
+  ui.messages.innerHTML = "";
+  state.messageCounter = 0;
+}
+
+function draftKey() {
+  const user = state.userId || "anon";
+  const sid = state.sessionId || "new";
+  return `${DRAFT_KEY_PREFIX}${user}_${sid}`;
+}
+
+function loadDraft() {
+  ui.messageInput.value = localStorage.getItem(draftKey()) || "";
+}
+
+function saveDraft() {
+  localStorage.setItem(draftKey(), ui.messageInput.value || "");
+}
+
+function clearDraft() {
+  localStorage.removeItem(draftKey());
+}
+
+function formatTimeStamp(timestamp) {
+  if (!timestamp) {
+    return "";
+  }
+  const dt = new Date(timestamp);
+  if (Number.isNaN(dt.getTime())) {
+    return "";
+  }
+  return dt.toLocaleString();
+}
+
+function stripConfidenceText(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const kept = [];
+  for (const line of lines) {
+    const t = line.trim().toLowerCase();
+    if (/^i'?m\s+\d+%\s+sure this is correct\.?$/.test(t)) {
+      continue;
+    }
+    if (/^confidence:\s*\d+%$/.test(t)) {
+      continue;
+    }
+    kept.push(line);
+  }
+  return kept.join("\n").trim();
+}
+
+function extractConfidenceFromText(text) {
+  const raw = String(text || "");
+  let match = raw.match(/confidence:\s*(\d+)%/i);
+  if (match) {
+    return Math.max(0, Math.min(100, Number(match[1])));
+  }
+  match = raw.match(/i'?m\s*(\d+)%\s*sure this is correct/i);
+  if (match) {
+    return Math.max(0, Math.min(100, Number(match[1])));
+  }
+  return null;
+}
+
+function formatAssistantText(payload) {
+  const parts = [payload.answer || ""];
+  const intent = String(payload.intent || "");
+  const showTrace = intent === "math" || intent === "problem_solving";
+  if (showTrace && Array.isArray(payload.reflection_steps) && payload.reflection_steps.length) {
+    const steps = payload.reflection_steps.map((step, idx) => `${idx + 1}. ${step}`).join("\n");
+    parts.push(`Reasoning trace:\n${steps}`);
+  }
+  const showRelated = intent === "knowledge" || intent === "problem_solving";
+  if (showRelated && Array.isArray(payload.related_concepts) && payload.related_concepts.length) {
+    const related = payload.related_concepts
+      .slice(0, 4)
+      .map((edge) => `${edge.source} ${edge.relation} ${edge.target}`)
+      .join("\n");
+    parts.push(`Related concepts:\n${related}`);
+  }
+  return parts.filter(Boolean).join("\n\n");
+}
+
+async function sendFeedback(signal, topic, note = "") {
+  if (!state.sessionId || !state.authToken) {
+    return;
+  }
+  try {
+    await api.json("/api/chat/feedback", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        session_id: state.sessionId,
+        topic: topic || null,
+        signal,
+        note,
+      }),
+    });
+    setStatus(signal === "up" ? "Feedback saved (helpful)." : "Feedback saved (needs correction).");
+  } catch (_error) {
+    setStatus("Feedback could not be saved.");
+  }
+}
+
+async function searchInSession(query) {
+  const term = String(query || "").trim();
+  if (!state.authToken) {
+    renderMessage("assistant", "Please sign in first.");
+    return;
+  }
+  if (!state.sessionId) {
+    renderMessage("assistant", "Start a chat first.");
+    return;
+  }
+  if (!term) {
+    renderMessage("assistant", "Type a search term first.");
+    return;
+  }
+  setStatus("Searching...");
+  setLoading(true);
+  try {
+    const payload = await api.json(
+      `/api/sessions/${encodeURIComponent(state.sessionId)}/search?q=${encodeURIComponent(term)}&limit=20`,
+      { headers: authHeaders() }
+    );
+    const results = Array.isArray(payload.results) ? payload.results : [];
+    if (!results.length) {
+      renderMessage("assistant", `No messages matched "${term}" in this chat.`, [], { timestamp: new Date().toISOString() });
+      return;
+    }
+    const lines = [`Search results for "${term}" (${results.length}):`];
+    for (const item of results.slice(0, 10)) {
+      const role = String(item.role || "").toUpperCase();
+      const when = formatTimeStamp(item.timestamp || "");
+      const excerpt = String(item.excerpt || "").replace(/\s+/g, " ").trim();
+      lines.push(`- [${role}${when ? ` @ ${when}` : ""}] ${excerpt}`);
+    }
+    renderMessage(
+      "assistant",
+      lines.join("\n"),
+      [{ title: "Session Search", url: "internal://session-search" }],
+      { timestamp: new Date().toISOString() }
+    );
+  } catch (error) {
+    renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+  } finally {
+    setLoading(false);
+    setStatus("Ready");
+  }
+}
+
+function renderMessage(role, text, references = [], meta = null) {
+  const el = document.createElement("article");
+  el.className = `msg ${role}`;
+  const cleanedText = role === "assistant" ? stripConfidenceText(text) : String(text || "");
+
+  const body = document.createElement("div");
+  body.className = "msg-body";
+  body.textContent = cleanedText;
+  el.appendChild(body);
+
+  if (meta && typeof meta === "object") {
+    if (role === "assistant" && typeof meta.confidence === "number") {
+      const confidenceWrap = document.createElement("div");
+      confidenceWrap.className = "confidence-wrap";
+      confidenceWrap.title = `${meta.confidence}% confidence`;
+      const confidenceMeter = document.createElement("div");
+      confidenceMeter.className = "confidence-meter";
+      const confidenceMarker = document.createElement("div");
+      confidenceMarker.className = "confidence-marker";
+      const pct = Math.max(0, Math.min(100, Number(meta.confidence)));
+      confidenceMarker.style.left = `${pct}%`;
+      confidenceMeter.appendChild(confidenceMarker);
+      confidenceWrap.appendChild(confidenceMeter);
+      el.appendChild(confidenceWrap);
+    }
+  }
+
+  if (Array.isArray(references) && references.length) {
+    const refs = document.createElement("div");
+    refs.className = "refs";
+    refs.innerHTML = "<strong>References:</strong><br>";
+    for (const ref of references) {
+      const title = ref.title || ref.url;
+      if (typeof ref.url === "string" && (ref.url.startsWith("memory://") || ref.url.startsWith("internal://"))) {
+        const row = document.createElement("span");
+        row.textContent = `${title} (${ref.url})`;
+        refs.appendChild(row);
+      } else {
+        const link = document.createElement("a");
+        link.href = ref.url;
+        link.target = "_blank";
+        link.rel = "noreferrer";
+        link.textContent = title;
+        refs.appendChild(link);
+      }
+      refs.appendChild(document.createElement("br"));
+    }
+    el.appendChild(refs);
+  }
+
+  if (role === "assistant") {
+    const actions = document.createElement("div");
+    actions.className = "msg-actions";
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "msg-action-btn";
+    copyBtn.type = "button";
+    copyBtn.textContent = "Copy";
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(cleanedText);
+        setStatus("Copied.");
+      } catch (_error) {
+        setStatus("Copy failed.");
+      }
+    });
+    actions.appendChild(copyBtn);
+
+    if (Number.isInteger(meta && meta.messageIndex)) {
+      const pinBtn = document.createElement("button");
+      pinBtn.className = "msg-action-btn";
+      pinBtn.type = "button";
+      pinBtn.textContent = "Pin";
+      pinBtn.addEventListener("click", async () => {
+        await pinMessageAt(meta.messageIndex);
+      });
+      actions.appendChild(pinBtn);
+    }
+
+    const upBtn = document.createElement("button");
+    upBtn.className = "msg-action-btn";
+    upBtn.type = "button";
+    upBtn.textContent = "Helpful";
+    upBtn.addEventListener("click", async () => {
+      await sendFeedback("up", meta && meta.topic ? meta.topic : state.lastAssistantTopic);
+      upBtn.disabled = true;
+      downBtn.disabled = true;
+    });
+    actions.appendChild(upBtn);
+
+    const downBtn = document.createElement("button");
+    downBtn.className = "msg-action-btn";
+    downBtn.type = "button";
+    downBtn.textContent = "Needs fix";
+    downBtn.addEventListener("click", async () => {
+      await sendFeedback("down", meta && meta.topic ? meta.topic : state.lastAssistantTopic);
+      upBtn.disabled = true;
+      downBtn.disabled = true;
+    });
+    actions.appendChild(downBtn);
+
+    const timeEl = document.createElement("span");
+    timeEl.className = "msg-time";
+    timeEl.textContent = formatTimeStamp(meta && meta.timestamp ? meta.timestamp : new Date().toISOString());
+    actions.appendChild(timeEl);
+    el.appendChild(actions);
+  } else if (role === "user") {
+    const actions = document.createElement("div");
+    actions.className = "msg-actions";
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "msg-action-btn";
+    editBtn.type = "button";
+    editBtn.textContent = "Edit & resend";
+    editBtn.addEventListener("click", async () => {
+      const next = window.prompt("Edit your message before resending:", cleanedText);
+      if (next === null) {
+        return;
+      }
+      const revised = String(next || "").trim();
+      if (!revised) {
+        setStatus("Edit canceled.");
+        return;
+      }
+      await sendChatMessage(revised);
+    });
+    actions.appendChild(editBtn);
+
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "msg-action-btn";
+    copyBtn.type = "button";
+    copyBtn.textContent = "Copy";
+    copyBtn.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(cleanedText);
+        setStatus("Copied.");
+      } catch (_error) {
+        setStatus("Copy failed.");
+      }
+    });
+    actions.appendChild(copyBtn);
+
+    if (Number.isInteger(meta && meta.messageIndex)) {
+      const pinBtn = document.createElement("button");
+      pinBtn.className = "msg-action-btn";
+      pinBtn.type = "button";
+      pinBtn.textContent = "Pin";
+      pinBtn.addEventListener("click", async () => {
+        await pinMessageAt(meta.messageIndex);
+      });
+      actions.appendChild(pinBtn);
+    }
+
+    const timeEl = document.createElement("span");
+    timeEl.className = "msg-time";
+    timeEl.textContent = formatTimeStamp(meta && meta.timestamp ? meta.timestamp : new Date().toISOString());
+    actions.appendChild(timeEl);
+    el.appendChild(actions);
+  }
+
+  ui.messages.appendChild(el);
+  ui.messages.scrollTop = ui.messages.scrollHeight;
+}
+
+function normalizeUserMessage(raw) {
+  const text = raw.trim().replace(/\s+/g, " ");
+  const lower = text.toLowerCase();
+  if (lower === "this is wrong" || lower === "wrong") {
+    return "that is wrong";
+  }
+  if (lower === "this is correct" || lower === "correct answer") {
+    return "correct";
+  }
+  if (lower.startsWith("the correct answer is ")) {
+    return `correct answer is ${text.slice("the correct answer is ".length)}`;
+  }
+  return text;
+}
+
+function renderSessions() {
+  ui.sessionsList.innerHTML = "";
+  for (const session of state.sessions) {
+    const li = document.createElement("li");
+    li.className = "session-item";
+    const row = document.createElement("div");
+    row.className = "session-row";
+
+    const btn = document.createElement("button");
+    btn.className = "session-open";
+    const tags = Array.isArray(session.tags) && session.tags.length ? ` [${session.tags.slice(0, 2).join(", ")}]` : "";
+    const pins = Number(session.pin_count || 0) > 0 ? ` #${session.pin_count}` : "";
+    btn.textContent = `${session.title || session.session_id}${tags}${pins}`;
+    if (session.session_id === state.sessionId) {
+      btn.classList.add("active");
+    }
+    btn.addEventListener("click", () => loadSession(session.session_id));
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "session-delete";
+    delBtn.type = "button";
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      await deleteSession(session.session_id);
+    });
+
+    row.appendChild(btn);
+    row.appendChild(delBtn);
+    li.appendChild(row);
+    ui.sessionsList.appendChild(li);
+  }
+}
+
+function resetChatState() {
+  state.sessionId = null;
+  state.sessions = [];
+  state.lastAssistantTopic = null;
+  state.sessionTags = [];
+  state.sessionPins = [];
+  ui.chatTitle.textContent = "Session";
+  clearMessages();
+  renderSessions();
+  loadDraft();
+}
+
+function forceSignedOut(note = "Please sign in to continue.") {
+  state.authToken = null;
+  state.userId = null;
+  setStoredAuth(null, null);
+  resetChatState();
+  setAuthUI(false);
+  setStatus("Signed out");
+  renderMessage("assistant", note, [], { timestamp: new Date().toISOString() });
+}
+
+function isAuthError(error) {
+  const txt = String((error && error.message) || "").toLowerCase();
+  return txt.includes("authentication required") || txt.includes("401");
+}
+
+function applyChatPayload(payload) {
+  state.sessionId = payload.session_id;
+  ui.chatTitle.textContent = payload.session_id;
+  state.lastAssistantTopic = payload.topic || null;
+  renderMessage("assistant", formatAssistantText(payload), payload.references || [], {
+    confidence: payload.confidence,
+    intent: payload.intent,
+    topic: payload.topic || null,
+    timestamp: new Date().toISOString(),
+    messageIndex: state.messageCounter++,
+  });
+}
+
+async function refreshSessions() {
+  const payload = await api.json("/api/sessions", { headers: authHeaders() });
+  state.sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+  renderSessions();
+}
+
+async function deleteSession(sessionId = null) {
+  const target = sessionId || state.sessionId;
+  if (!state.authToken) {
+    renderMessage("assistant", "Please sign in first.");
+    return;
+  }
+  if (!target) {
+    renderMessage("assistant", "No active chat to delete.");
+    return;
+  }
+  const ok = window.confirm(`Delete chat ${target}?`);
+  if (!ok) {
+    return;
+  }
+  setStatus("Deleting chat...");
+  setLoading(true);
+  try {
+    await api.json(`/api/sessions/${encodeURIComponent(target)}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    if (state.sessionId === target) {
+      state.sessionId = null;
+      state.lastAssistantTopic = null;
+      state.sessionTags = [];
+      state.sessionPins = [];
+      ui.chatTitle.textContent = "New Session";
+      clearMessages();
+      renderMessage("assistant", "Chat deleted. Start a new message to open a new session.", [], {
+        timestamp: new Date().toISOString(),
+      });
+    }
+    await refreshSessions();
+  } catch (error) {
+    renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+  } finally {
+    setLoading(false);
+    setStatus("Ready");
+  }
+}
+
+async function loadSession(sessionId) {
+  const payload = await api.json(`/api/sessions/${encodeURIComponent(sessionId)}`, { headers: authHeaders() });
+  state.sessionId = payload.session_id;
+  ui.chatTitle.textContent = payload.session_id;
+  state.sessionTags = Array.isArray(payload.tags) ? payload.tags : [];
+  state.sessionPins = Array.isArray(payload.pins) ? payload.pins : [];
+  clearMessages();
+  for (let idx = 0; idx < (payload.history || []).length; idx += 1) {
+    const msg = payload.history[idx];
+    const role = msg.role === "user" ? "user" : "assistant";
+    const meta = {
+      confidence: role === "assistant" ? extractConfidenceFromText(msg.content || "") : null,
+      timestamp: msg.timestamp || "",
+      topic: null,
+      messageIndex: idx,
+    };
+    renderMessage(role, msg.content || "", [], meta);
+    state.messageCounter = idx + 1;
+  }
+  renderSessions();
+  loadDraft();
+}
+
+async function handleSignIn(username, password) {
+  const payload = await api.json("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  state.authToken = payload.token || null;
+  state.userId = payload.user_id || username;
+  setStoredAuth(state.authToken, state.userId);
+  setAuthUI(true);
+  resetChatState();
+  await refreshSessions();
+  renderMessage("assistant", `Signed in as ${state.userId}. You can start chatting now.`, [], { timestamp: new Date().toISOString() });
+}
+
+async function handleSignUp(username, password) {
+  const payload = await api.json("/api/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  state.authToken = payload.token || null;
+  state.userId = payload.user_id || username;
+  setStoredAuth(state.authToken, state.userId);
+  setAuthUI(true);
+  resetChatState();
+  await refreshSessions();
+  renderMessage("assistant", `Account created. Signed in as ${state.userId}.`, [], { timestamp: new Date().toISOString() });
+}
+
+async function handleSignOut() {
+  try {
+    if (state.authToken) {
+      await api.json("/api/auth/logout", { method: "POST", headers: authHeaders() });
+    }
+  } catch (_error) {
+    // Keep local signout even on network errors.
+  }
+  forceSignedOut("Signed out.");
+}
+
+async function sendChatMessage(rawMessage) {
+  const message = normalizeUserMessage(rawMessage);
+  if (!message) {
+    return;
+  }
+  renderMessage("user", rawMessage.trim(), [], { timestamp: new Date().toISOString(), messageIndex: state.messageCounter++ });
+  ui.messageInput.value = "";
+  clearDraft();
+  setStatus("Thinking...");
+  setLoading(true);
+  try {
+    const payload = await api.json("/api/chat", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ message, session_id: state.sessionId }),
+    });
+    applyChatPayload(payload);
+    await refreshSessions();
+  } catch (error) {
+    if (isAuthError(error)) {
+      forceSignedOut("Session expired. Please sign in again.");
+    } else {
+      renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+    }
+  } finally {
+    setLoading(false);
+    setStatus("Ready");
+  }
+}
+
+async function runSessionAction(endpoint, workingStatus) {
+  if (!state.authToken) {
+    renderMessage("assistant", "Please sign in first.");
+    return;
+  }
+  if (!state.sessionId) {
+    renderMessage("assistant", "Start a chat first.");
+    return;
+  }
+  setStatus(workingStatus);
+  setLoading(true);
+  try {
+    const payload = await api.json(endpoint, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ session_id: state.sessionId }),
+    });
+    applyChatPayload(payload);
+    await refreshSessions();
+  } catch (error) {
+    if (isAuthError(error)) {
+      forceSignedOut("Session expired. Please sign in again.");
+    } else {
+      renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+    }
+  } finally {
+    setLoading(false);
+    setStatus("Ready");
+  }
+}
+
+async function requestContinue() {
+  await runSessionAction("/api/chat/continue", "Continuing...");
+}
+
+async function requestRegenerate() {
+  await runSessionAction("/api/chat/regenerate", "Regenerating...");
+}
+
+async function pinMessageAt(messageIndex) {
+  if (!state.authToken || !state.sessionId) {
+    return;
+  }
+  const note = window.prompt("Optional pin note:", "") || "";
+  try {
+    await api.json(`/api/sessions/${encodeURIComponent(state.sessionId)}/pins`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        message_index: Number(messageIndex),
+        note,
+      }),
+    });
+    setStatus("Message pinned.");
+  } catch (error) {
+    setStatus(`Pin failed: ${error.message}`);
+  }
+}
+
+async function showPins() {
+  if (!state.authToken) {
+    renderMessage("assistant", "Please sign in first.");
+    return;
+  }
+  if (!state.sessionId) {
+    renderMessage("assistant", "Start a chat first.");
+    return;
+  }
+  setStatus("Loading pins...");
+  setLoading(true);
+  try {
+    const payload = await api.json(`/api/sessions/${encodeURIComponent(state.sessionId)}/pins`, {
+      headers: authHeaders(),
+    });
+    const pins = Array.isArray(payload.pins) ? payload.pins : [];
+    state.sessionPins = pins;
+    if (!pins.length) {
+      renderMessage("assistant", "No pinned messages in this session yet.", [], { timestamp: new Date().toISOString() });
+    } else {
+      const lines = [`Pinned messages (${pins.length}):`];
+      for (const pin of pins.slice(0, 20)) {
+        const role = String(pin.role || "").toUpperCase();
+        const when = formatTimeStamp(pin.timestamp || "");
+        const notePart = pin.note ? ` | note: ${pin.note}` : "";
+        lines.push(`- #${pin.message_index} [${role}${when ? ` @ ${when}` : ""}] ${pin.excerpt}${notePart}`);
+      }
+      renderMessage("assistant", lines.join("\n"), [{ title: "Pinned Messages", url: "internal://pins" }], {
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (error) {
+    renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+  } finally {
+    setLoading(false);
+    setStatus("Ready");
+  }
+}
+
+async function setSessionTags(tags) {
+  if (!state.authToken || !state.sessionId) {
+    return;
+  }
+  const payload = await api.json(`/api/sessions/${encodeURIComponent(state.sessionId)}/tags`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ tags }),
+  });
+  state.sessionTags = Array.isArray(payload.tags) ? payload.tags : [];
+  await refreshSessions();
+}
+
+async function setTagsFromPrompt() {
+  if (!state.authToken) {
+    renderMessage("assistant", "Please sign in first.");
+    return;
+  }
+  if (!state.sessionId) {
+    renderMessage("assistant", "Start a chat first.");
+    return;
+  }
+  const existing = state.sessionTags.join(", ");
+  const raw = window.prompt("Set session tags (comma-separated):", existing);
+  if (raw === null) {
+    return;
+  }
+  const tags = String(raw || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  try {
+    await setSessionTags(tags);
+    const text = state.sessionTags.length ? `Session tags updated: ${state.sessionTags.join(", ")}` : "Session tags cleared.";
+    renderMessage("assistant", text, [{ title: "Session Tags", url: "internal://session-tags" }], {
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+  }
+}
+
+async function showProfile() {
+  if (!state.authToken) {
+    renderMessage("assistant", "Please sign in first.");
+    return;
+  }
+  setStatus("Loading profile...");
+  setLoading(true);
+  try {
+    const payload = await api.json("/api/profile", { headers: authHeaders() });
+    const profile = payload.profile || {};
+    const keys = Object.keys(profile);
+    if (!keys.length) {
+      renderMessage("assistant", "No saved profile facts yet. Try: my name is <name>.");
+    } else {
+      const lines = ["Saved profile facts:"];
+      for (const key of keys) {
+        const item = profile[key] || {};
+        lines.push(`- ${key}: ${item.value || ""} (${Math.round(Number(item.confidence || 0) * 100)}%)`);
+      }
+      renderMessage("assistant", lines.join("\n"), [{ title: "Learned User Profile", url: "memory://user-facts" }], {
+        timestamp: new Date().toISOString(),
+      });
+    }
+  } catch (error) {
+    renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+  } finally {
+    setLoading(false);
+    setStatus("Ready");
+  }
+}
+
+async function showSuggestions() {
+  if (!state.authToken) {
+    renderMessage("assistant", "Please sign in first.");
+    return;
+  }
+  setStatus("Loading suggestions...");
+  setLoading(true);
+  try {
+    const payload = await api.json("/api/chat/suggestions", { headers: authHeaders() });
+    const list = Array.isArray(payload.suggestions) ? payload.suggestions : [];
+    if (!list.length) {
+      renderMessage("assistant", "No suggestions available right now.");
+    } else {
+      const text = ["Try one of these prompts:", ...list.map((item, idx) => `${idx + 1}. ${item}`)].join("\n");
+      renderMessage("assistant", text, [], { timestamp: new Date().toISOString() });
+    }
+  } catch (error) {
+    renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+  } finally {
+    setLoading(false);
+    setStatus("Ready");
+  }
+}
+
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function exportCurrentSession(format = "markdown") {
+  if (!state.authToken) {
+    renderMessage("assistant", "Please sign in first.");
+    return;
+  }
+  if (!state.sessionId) {
+    renderMessage("assistant", "Start a chat first.");
+    return;
+  }
+  setStatus("Exporting...");
+  setLoading(true);
+  try {
+    const payload = await api.json(`/api/sessions/${encodeURIComponent(state.sessionId)}/export?fmt=${encodeURIComponent(format)}`, {
+      headers: authHeaders(),
+    });
+    const mode = String(payload.format || "markdown").toLowerCase();
+    if (mode === "json") {
+      const text = JSON.stringify(payload.content || [], null, 2);
+      downloadText(`${state.sessionId}.json`, text);
+    } else {
+      downloadText(`${state.sessionId}.md`, String(payload.content || ""));
+    }
+    renderMessage("assistant", `Exported ${state.sessionId} as ${mode}.`, [], { timestamp: new Date().toISOString() });
+  } catch (error) {
+    renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+  } finally {
+    setLoading(false);
+    setStatus("Ready");
+  }
+}
+
+async function handleSlashCommand(rawText) {
+  const text = String(rawText || "").trim();
+  if (!text.startsWith("/")) {
+    return false;
+  }
+  const parts = text.slice(1).split(/\s+/).filter(Boolean);
+  const cmd = (parts.shift() || "").toLowerCase();
+  if (!cmd) {
+    return true;
+  }
+
+  if (cmd === "help") {
+    renderMessage(
+      "assistant",
+      [
+        "Slash commands:",
+        "/help",
+        "/new",
+        "/continue",
+        "/regenerate",
+        "/profile",
+        "/suggest",
+        "/export [markdown|json]",
+        "/search <text>",
+        "/pins",
+        "/tags [comma,separated]",
+        "/mode [simple|standard|advanced]",
+        "/delete",
+      ].join("\n"),
+      [],
+      { timestamp: new Date().toISOString() }
+    );
+    return true;
+  }
+  if (cmd === "new") {
+    ui.newSessionBtn.click();
+    return true;
+  }
+  if (cmd === "continue") {
+    await requestContinue();
+    return true;
+  }
+  if (cmd === "regen" || cmd === "regenerate") {
+    await requestRegenerate();
+    return true;
+  }
+  if (cmd === "profile") {
+    await showProfile();
+    return true;
+  }
+  if (cmd === "suggest" || cmd === "suggestions") {
+    await showSuggestions();
+    return true;
+  }
+  if (cmd === "export") {
+    const mode = (parts[0] || "markdown").toLowerCase();
+    await exportCurrentSession(mode === "json" ? "json" : "markdown");
+    return true;
+  }
+  if (cmd === "search") {
+    await searchInSession(parts.join(" "));
+    return true;
+  }
+  if (cmd === "pins") {
+    await showPins();
+    return true;
+  }
+  if (cmd === "tags") {
+    if (!parts.length) {
+      await setTagsFromPrompt();
+      return true;
+    }
+    const tags = parts.join(" ").split(",").map((item) => item.trim()).filter(Boolean);
+    try {
+      await setSessionTags(tags);
+      renderMessage("assistant", `Session tags updated: ${state.sessionTags.join(", ") || "(none)"}`, [], {
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+    }
+    return true;
+  }
+  if (cmd === "mode") {
+    const mode = (parts[0] || "").toLowerCase().trim();
+    if (!mode) {
+      await sendChatMessage("what is my response mode");
+      return true;
+    }
+    if (!["simple", "standard", "advanced"].includes(mode)) {
+      renderMessage("assistant", "Mode must be one of: simple, standard, advanced.", [], {
+        timestamp: new Date().toISOString(),
+      });
+      return true;
+    }
+    await sendChatMessage(`set response mode to ${mode}`);
+    return true;
+  }
+  if (cmd === "delete") {
+    await deleteSession();
+    return true;
+  }
+
+  renderMessage("assistant", `Unknown command: /${cmd}. Use /help.`, [], { timestamp: new Date().toISOString() });
+  return true;
+}
+
+ui.authForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (state.authToken) {
+    return;
+  }
+  const username = ui.authUsername.value.trim().toLowerCase();
+  const password = ui.authPassword.value;
+  if (!username || !password) {
+    renderMessage("assistant", "Enter username and password.");
+    return;
+  }
+  setStatus("Signing in...");
+  setLoading(true);
+  try {
+    await handleSignIn(username, password);
+    setStatus("Ready");
+    loadDraft();
+  } catch (error) {
+    renderMessage("assistant", `Sign in failed: ${error.message}`, [], { timestamp: new Date().toISOString() });
+    setStatus("Ready");
+  } finally {
+    setLoading(false);
+  }
+});
+
+ui.signUpBtn.addEventListener("click", async () => {
+  if (state.authToken) {
+    return;
+  }
+  const username = ui.authUsername.value.trim().toLowerCase();
+  const password = ui.authPassword.value;
+  if (!username || !password) {
+    renderMessage("assistant", "Enter username and password.");
+    return;
+  }
+  setStatus("Creating account...");
+  setLoading(true);
+  try {
+    await handleSignUp(username, password);
+    setStatus("Ready");
+    loadDraft();
+  } catch (error) {
+    renderMessage("assistant", `Sign up failed: ${error.message}`, [], { timestamp: new Date().toISOString() });
+    setStatus("Ready");
+  } finally {
+    setLoading(false);
+  }
+});
+
+ui.signOutBtn.addEventListener("click", async () => {
+  setStatus("Signing out...");
+  setLoading(true);
+  await handleSignOut();
+  setLoading(false);
+});
+
+ui.newSessionBtn.addEventListener("click", () => {
+  if (!state.authToken) {
+    renderMessage("assistant", "Please sign in first.");
+    return;
+  }
+  state.sessionId = null;
+  state.lastAssistantTopic = null;
+  state.sessionTags = [];
+  state.sessionPins = [];
+  ui.chatTitle.textContent = "New Session";
+  clearMessages();
+  renderSessions();
+  loadDraft();
+  renderMessage("assistant", "New session ready. Send a message to begin.", [], { timestamp: new Date().toISOString() });
+});
+
+if (ui.continueBtn) {
+  ui.continueBtn.addEventListener("click", async () => {
+    await requestContinue();
+  });
+}
+
+if (ui.regenerateBtn) {
+  ui.regenerateBtn.addEventListener("click", async () => {
+    await requestRegenerate();
+  });
+}
+
+if (ui.exportBtn) {
+  ui.exportBtn.addEventListener("click", async () => {
+    await exportCurrentSession("markdown");
+  });
+}
+
+if (ui.deleteSessionBtn) {
+  ui.deleteSessionBtn.addEventListener("click", async () => {
+    await deleteSession();
+  });
+}
+
+if (ui.profileBtn) {
+  ui.profileBtn.addEventListener("click", async () => {
+    await showProfile();
+  });
+}
+
+if (ui.pinsBtn) {
+  ui.pinsBtn.addEventListener("click", async () => {
+    await showPins();
+  });
+}
+
+if (ui.tagsBtn) {
+  ui.tagsBtn.addEventListener("click", async () => {
+    await setTagsFromPrompt();
+  });
+}
+
+if (ui.searchBtn && ui.searchInput) {
+  ui.searchBtn.addEventListener("click", async () => {
+    await searchInSession(ui.searchInput.value);
+  });
+
+  ui.searchInput.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    await searchInSession(ui.searchInput.value);
+  });
+}
+
+ui.messageInput.addEventListener("input", () => {
+  saveDraft();
+});
+
+ui.chatForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!state.authToken) {
+    renderMessage("assistant", "Please sign in first.");
+    return;
+  }
+  const rawMessage = ui.messageInput.value;
+  const cleaned = rawMessage.trim();
+  if (!cleaned) {
+    return;
+  }
+  if (await handleSlashCommand(cleaned)) {
+    ui.messageInput.value = "";
+    clearDraft();
+    return;
+  }
+  if (cleaned.toLowerCase() === "continue") {
+    ui.messageInput.value = "";
+    clearDraft();
+    await requestContinue();
+    return;
+  }
+  if (cleaned.toLowerCase() === "regenerate") {
+    ui.messageInput.value = "";
+    clearDraft();
+    await requestRegenerate();
+    return;
+  }
+  await sendChatMessage(rawMessage);
+});
+
+async function boot() {
+  setStatus("Loading...");
+  localStorage.removeItem("asseri_user_id");
+
+  if (!API_BASE && (window.location.hostname.endsWith("github.io") || window.location.pathname.startsWith("/docs"))) {
+    renderMessage(
+      "assistant",
+      "Backend URL is not configured for this hosted page. Open this page with ?api=https://YOUR-BACKEND-URL, then refresh.",
+      [],
+      { timestamp: new Date().toISOString() }
+    );
+  }
+
+  const storedToken = (localStorage.getItem(AUTH_TOKEN_KEY) || "").trim();
+  const storedUser = (localStorage.getItem(AUTH_USER_KEY) || "").trim();
+  state.authToken = storedToken || null;
+  state.userId = storedUser || null;
+
+  if (!state.authToken) {
+    setAuthUI(false);
+    renderMessage("assistant", "Sign in or create an account to start chatting.", [], { timestamp: new Date().toISOString() });
+    setStatus("Ready");
+    loadDraft();
+    return;
+  }
+
+  try {
+    const me = await api.json("/api/auth/me", { headers: authHeaders() });
+    state.userId = me.user_id || state.userId;
+    setStoredAuth(state.authToken, state.userId);
+    setAuthUI(true);
+    await refreshSessions();
+    renderMessage("assistant", `Welcome back, ${state.userId}. Ask anything: math, knowledge, or conversation.`, [], {
+      timestamp: new Date().toISOString(),
+    });
+    loadDraft();
+  } catch (_error) {
+    forceSignedOut("Session expired. Please sign in again.");
+  } finally {
+    setStatus("Ready");
+  }
+}
+
+boot();
