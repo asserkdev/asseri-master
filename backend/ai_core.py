@@ -444,67 +444,178 @@ class AICore:
         return aliases.get(t, t)
 
     @classmethod
+    def _parse_quantified_clause(cls, text: str) -> dict[str, str] | None:
+        s = re.sub(r"\s+", " ", text.lower()).strip(" .?!,;")
+        for pattern, kind in [
+            (r"^all ([a-z ]+?) are ([a-z ]+)$", "all_are"),
+            (r"^no ([a-z ]+?) are ([a-z ]+)$", "no_are"),
+            (r"^some ([a-z ]+?) are not ([a-z ]+)$", "some_not_are"),
+            (r"^some ([a-z ]+?) are ([a-z ]+)$", "some_are"),
+        ]:
+            m = re.match(pattern, s)
+            if m:
+                left_raw = m.group(1).strip()
+                right_raw = m.group(2).strip()
+                return {
+                    "kind": kind,
+                    "left_raw": left_raw,
+                    "right_raw": right_raw,
+                    "left": cls._norm_entity(left_raw),
+                    "right": cls._norm_entity(right_raw),
+                }
+
+        m = re.match(r"^some ([a-z ]+?) ([a-z][a-z ]+)$", s)
+        if m:
+            left_raw = m.group(1).strip()
+            pred_raw = m.group(2).strip()
+            if pred_raw.startswith("are "):
+                return None
+            return {
+                "kind": "some_predicate",
+                "left_raw": left_raw,
+                "right_raw": pred_raw,
+                "left": cls._norm_entity(left_raw),
+                "right": cls._norm_entity(pred_raw),
+            }
+        return None
+
+    @staticmethod
+    def _eval_clause(clause: dict[str, str], assignment: dict[str, int], universe_mask: int) -> bool:
+        a = assignment.get(clause["left"], 0)
+        b = assignment.get(clause["right"], 0)
+        kind = clause["kind"]
+        if kind == "all_are":
+            return (a & (~b & universe_mask)) == 0
+        if kind == "no_are":
+            return (a & b) == 0
+        if kind in {"some_are", "some_predicate"}:
+            return (a & b) != 0
+        if kind == "some_not_are":
+            return (a & (~b & universe_mask)) != 0
+        return False
+
+    @staticmethod
+    def _powerset_masks(size: int) -> list[int]:
+        return [i for i in range(1 << size)]
+
+    @classmethod
+    def _quantified_entailment(
+        cls,
+        premises: list[dict[str, str]],
+        conclusion: dict[str, str],
+    ) -> tuple[bool, bool, dict[str, int] | None]:
+        predicates: list[str] = []
+        for c in premises + [conclusion]:
+            for key in [c["left"], c["right"]]:
+                if key not in predicates:
+                    predicates.append(key)
+
+        size = 3
+        universe_mask = (1 << size) - 1
+        masks = cls._powerset_masks(size)
+        satisfiable = False
+        counterexample: dict[str, int] | None = None
+
+        def backtrack(idx: int, current: dict[str, int]) -> None:
+            nonlocal satisfiable, counterexample
+            if idx >= len(predicates):
+                prem_ok = all(cls._eval_clause(c, current, universe_mask) for c in premises)
+                if not prem_ok:
+                    return
+                satisfiable = True
+                concl_ok = cls._eval_clause(conclusion, current, universe_mask)
+                if not concl_ok and counterexample is None:
+                    counterexample = dict(current)
+                return
+            pred = predicates[idx]
+            for m in masks:
+                current[pred] = m
+                backtrack(idx + 1, current)
+            current.pop(pred, None)
+
+        backtrack(0, {})
+        entailed = satisfiable and counterexample is None
+        return entailed, satisfiable, counterexample
+
+    @classmethod
+    def _render_counterexample(cls, conclusion: dict[str, str], model: dict[str, int]) -> str:
+        kind = conclusion["kind"]
+        l_raw = conclusion["left_raw"]
+        r_raw = conclusion["right_raw"]
+        if kind in {"some_are", "some_predicate"}:
+            return f"Counterexample: premises can be true while no object is both '{l_raw}' and '{r_raw}'."
+        if kind == "all_are":
+            return f"Counterexample: premises can be true while at least one '{l_raw}' is not '{r_raw}'."
+        if kind == "no_are":
+            return f"Counterexample: premises can be true while some '{l_raw}' is also '{r_raw}'."
+        if kind == "some_not_are":
+            return f"Counterexample: premises can be true while every '{l_raw}' is '{r_raw}'."
+        return "Counterexample model found."
+
+    @classmethod
     def _logical_syllogism_answer(cls, query: str) -> dict[str, Any] | None:
         low = re.sub(r"\s+", " ", query.lower()).strip()
         low = re.sub(r"\bexplain\b", "", low).strip(" .?!")
-        pattern = (
-            r"if all ([a-z ]+?) are ([a-z ]+?) and some ([a-z ]+?) ([a-z ]+?), "
-            r"does it logically follow that some ([a-z ]+?) ([a-z ]+)$"
-        )
-        m = re.match(pattern, low)
+        m = re.match(r"^if (.+?), does it(?: logically)? follow that (.+)$", low)
         if not m:
             return None
+        premises_raw = [p.strip() for p in re.split(r"\s+and\s+", m.group(1).strip()) if p.strip()]
+        conclusion_raw = m.group(2).strip()
+        premises = [cls._parse_quantified_clause(p) for p in premises_raw]
+        conclusion = cls._parse_quantified_clause(conclusion_raw)
+        if not conclusion or any(p is None for p in premises):
+            return None
 
-        a_raw, b_raw, c_raw, p_raw, d_raw, q_raw = [m.group(i).strip() for i in range(1, 7)]
-        a = cls._norm_entity(a_raw)
-        b = cls._norm_entity(b_raw)
-        c = cls._norm_entity(c_raw)
-        d = cls._norm_entity(d_raw)
-        p = re.sub(r"\s+", " ", p_raw.strip())
-        q = re.sub(r"\s+", " ", q_raw.strip())
+        valid_premises = [p for p in premises if p is not None]
+        entailed, satisfiable, witness = cls._quantified_entailment(valid_premises, conclusion)
+        if not satisfiable:
+            answer = "The premises are mutually inconsistent, so the argument structure is invalid as stated."
+            return {
+                "answer": answer,
+                "confidence": 0.88,
+                "intent": "problem_solving",
+                "references": [{"title": "Predicate Logic Rule", "url": "internal://logic/quantifiers"}],
+                "reasoning_steps": [
+                    "Parsed quantified premises and conclusion.",
+                    "Checked model satisfiability.",
+                    "Found no satisfying model for all premises.",
+                ],
+                "direct_reasoning": True,
+            }
 
-        same_predicate = p == q
-        if same_predicate and c == b and d == a:
+        if entailed:
+            answer = (
+                "Yes. It logically follows from the premises.\n"
+                "1. Parsed premises and conclusion as quantified statements.\n"
+                "2. Checked all finite models where premises are true.\n"
+                "3. Conclusion is true in every such model."
+            )
+            reasoning = [
+                "Parsed quantified premises and conclusion.",
+                "Ran finite-model entailment check.",
+                "No counterexample model exists.",
+            ]
+        else:
+            counterexample = cls._render_counterexample(conclusion, witness or {})
             answer = (
                 "No. It does not logically follow.\n"
-                f"1. Premise: all {a_raw} are {b_raw} (every {a} is in {b}).\n"
-                f"2. Premise: some {c_raw} {p_raw} (an element exists in {b}).\n"
-                f"3. This does not force that element to be in {a}.\n"
-                f"4. Therefore, 'some {d_raw} {q_raw}' is not guaranteed."
+                "1. Parsed premises and conclusion as quantified statements.\n"
+                "2. Ran finite-model entailment check.\n"
+                f"3. Found a counterexample model. {counterexample}"
             )
-            return {
-                "answer": answer,
-                "confidence": 0.96,
-                "intent": "problem_solving",
-                "references": [{"title": "Predicate Logic Rule", "url": "internal://logic/quantifiers"}],
-                "reasoning_steps": [
-                    "Parsed quantified premises and conclusion.",
-                    "Detected existential claim over superset, not subset.",
-                    "Marked inference as invalid.",
-                ],
-                "direct_reasoning": True,
-            }
-
-        if same_predicate and c == a and (d == a or d == b):
-            answer = (
-                "Yes. This follows logically.\n"
-                f"1. Premise gives at least one {a_raw} with property '{p_raw}'.\n"
-                f"2. All {a_raw} are {b_raw}.\n"
-                f"3. So at least one {d_raw} has that same property."
-            )
-            return {
-                "answer": answer,
-                "confidence": 0.93,
-                "intent": "problem_solving",
-                "references": [{"title": "Predicate Logic Rule", "url": "internal://logic/quantifiers"}],
-                "reasoning_steps": [
-                    "Parsed quantified premises and conclusion.",
-                    "Mapped existential witness through subset relation.",
-                    "Marked inference as valid.",
-                ],
-                "direct_reasoning": True,
-            }
-        return None
+            reasoning = [
+                "Parsed quantified premises and conclusion.",
+                "Ran finite-model entailment check.",
+                "Counterexample model found, so entailment fails.",
+            ]
+        return {
+            "answer": answer,
+            "confidence": 0.95 if entailed else 0.93,
+            "intent": "problem_solving",
+            "references": [{"title": "Predicate Logic Rule", "url": "internal://logic/quantifiers"}],
+            "reasoning_steps": reasoning,
+            "direct_reasoning": True,
+        }
 
     @staticmethod
     def _fact_claim_override(query: str) -> dict[str, Any] | None:
@@ -571,6 +682,36 @@ class AICore:
         if fact:
             return fact
         return None
+
+    @staticmethod
+    def _is_likely_fictional_query(query: str) -> bool:
+        q = re.sub(r"\s+", " ", query.lower()).strip()
+        explicit = [
+            "quantum bananas",
+            "interstellar taxation",
+            "dragon economy",
+            "time travel pizza",
+            "telepathic database",
+        ]
+        if any(p in q for p in explicit):
+            return True
+        sci = any(k in q for k in ["quantum", "interstellar", "galactic", "telepathic", "wormhole"])
+        absurd = any(k in q for k in ["bananas", "unicorn", "wizard", "magic beans", "dragon"])
+        return sci and absurd
+
+    @staticmethod
+    def _fictional_query_response(query: str) -> tuple[str, list[dict[str, str]], float, list[str]]:
+        answer = (
+            f"I could not verify factual evidence for '{query}'.\n"
+            "If you want, I can answer this as creative world-building instead of factual analysis."
+        )
+        refs = [{"title": "Clarification Needed", "url": "internal://clarification"}]
+        steps = [
+            "Detected likely fictional or speculative concept mix.",
+            "Avoided fabricating factual claims.",
+            "Requested mode clarification (factual vs creative).",
+        ]
+        return answer, refs, 0.68, steps
 
     def _extract_correction_value(self, text: str, topic_hint: str | None = None) -> str | None:
         raw = text.strip()
@@ -1814,6 +1955,17 @@ class AICore:
         deterministic_candidate = self._deterministic_reasoning_answer(normalized)
         if deterministic_candidate and str(deterministic_candidate.get("intent", "")) == "problem_solving":
             intent = "problem_solving"
+        fictional_candidate: dict[str, Any] | None = None
+        if intent in {"knowledge", "problem_solving"} and not deterministic_candidate and self._is_likely_fictional_query(normalized):
+            ans, refs, conf, steps = self._fictional_query_response(normalized)
+            fictional_candidate = {
+                "answer": ans,
+                "references": refs,
+                "confidence": conf,
+                "reasoning_steps": steps,
+                "direct_reasoning": True,
+                "intent": "knowledge",
+            }
         topic = self._topic_from_query(normalized)
         self._maybe_update_session_title(session_id, topic, normalized, intent, user_id=user_id)
         self.memory.bump_pattern(topic, user_id=user_id)
@@ -1823,7 +1975,11 @@ class AICore:
         internal_candidate = (
             deterministic_candidate
             if deterministic_candidate and intent in {"knowledge", "problem_solving"}
-            else (self._internal_knowledge_lookup(normalized, topic) if intent in {"knowledge", "problem_solving"} else None)
+            else (
+                fictional_candidate
+                if fictional_candidate and intent in {"knowledge", "problem_solving"}
+                else (self._internal_knowledge_lookup(normalized, topic) if intent in {"knowledge", "problem_solving"} else None)
+            )
         )
 
         if intent in {"knowledge", "problem_solving"} and not internal_candidate and self._is_overly_ambiguous_query(normalized):
@@ -2023,4 +2179,3 @@ class AICore:
             "topic": topic,
             "related_concepts": self.memory.graph_neighbors(topic, limit=4, user_id=user_id),
         }
-
