@@ -644,7 +644,58 @@ class MemoryStore:
         with self.lock:
             state = self._state_no_lock(user_id)
             item = state["rules"].get(topic)
-            return dict(item) if isinstance(item, dict) else None
+            if not isinstance(item, dict):
+                return None
+            payload = dict(item)
+            if "candidate" not in payload:
+                payload["candidate"] = None
+            if "history" not in payload or not isinstance(payload.get("history"), list):
+                payload["history"] = []
+            return payload
+
+    @staticmethod
+    def _rule_confidence(base: float, corrections: int, confirmations: int, supporting_sources: int, contradictions: int) -> float:
+        value = (
+            float(base)
+            + (0.06 * max(0, corrections))
+            + (0.05 * max(0, confirmations))
+            + (0.07 * max(0, supporting_sources))
+            - (0.09 * max(0, contradictions))
+        )
+        return max(0.05, min(0.99, value))
+
+    @staticmethod
+    def _ensure_rule_shape(payload: dict[str, Any] | None) -> dict[str, Any]:
+        src = payload if isinstance(payload, dict) else {}
+        current = src.get("current", {})
+        history = src.get("history", [])
+        candidate = src.get("candidate")
+        version = int(src.get("version", 1))
+        return {
+            "current": dict(current) if isinstance(current, dict) else {},
+            "candidate": dict(candidate) if isinstance(candidate, dict) else None,
+            "history": list(history) if isinstance(history, list) else [],
+            "version": max(1, version),
+        }
+
+    @staticmethod
+    def _init_candidate(answer: str, source: str, base_confidence: float, evidence: str = "") -> dict[str, Any]:
+        return {
+            "answer": str(answer).strip(),
+            "source": str(source).strip() or "unknown",
+            "status": "pending",
+            "base_confidence": max(0.05, min(0.99, float(base_confidence))),
+            "confidence": max(0.05, min(0.99, float(base_confidence))),
+            "signals": {
+                "corrections": 1 if source.startswith("user_") else 0,
+                "confirmations": 0,
+                "supporting_sources": 0,
+                "contradictions": 0,
+            },
+            "evidence": [str(evidence).strip()] if str(evidence or "").strip() else [],
+            "timestamp": now_iso(),
+            "last_updated": now_iso(),
+        }
 
     def upsert_rule(
         self,
@@ -652,12 +703,15 @@ class MemoryStore:
         answer: str,
         confidence: float,
         source: str,
+        *,
+        verified: bool = True,
+        source_count: int = 1,
         user_id: str | None = None,
     ) -> None:
         with self.lock:
             state = self._state_no_lock(user_id)
             rules = state["rules"]
-            prev = rules.get(topic) if isinstance(rules.get(topic), dict) else None
+            prev = self._ensure_rule_shape(rules.get(topic) if isinstance(rules.get(topic), dict) else None)
             history: list[dict[str, Any]] = []
             if prev:
                 current = prev.get("current", {})
@@ -666,17 +720,213 @@ class MemoryStore:
                     moved["status"] = "outdated"
                     moved["timestamp"] = now_iso()
                     history = list(prev.get("history", [])) + [moved]
+                candidate = prev.get("candidate")
+                if isinstance(candidate, dict) and candidate:
+                    stale = dict(candidate)
+                    stale["status"] = "discarded_candidate"
+                    stale["timestamp"] = now_iso()
+                    history.append(stale)
             rules[topic] = {
                 "current": {
                     "answer": answer,
                     "confidence": max(0.05, min(0.99, float(confidence))),
                     "source": source,
                     "status": "active",
+                    "verified": bool(verified),
+                    "source_count": max(1, int(source_count)),
                     "timestamp": now_iso(),
                 },
+                "candidate": None,
                 "history": history[-100:],
+                "version": int(prev.get("version", 1)) + 1 if isinstance(prev, dict) else 1,
             }
             self._save()
+
+    def submit_candidate_rule(
+        self,
+        topic: str,
+        answer: str,
+        source: str,
+        base_confidence: float = 0.68,
+        evidence: str = "",
+        user_id: str | None = None,
+    ) -> None:
+        clean_answer = re.sub(r"\s+", " ", (answer or "").strip())
+        if not clean_answer:
+            return
+        with self.lock:
+            state = self._state_no_lock(user_id)
+            rules = state["rules"]
+            payload = self._ensure_rule_shape(rules.get(topic) if isinstance(rules.get(topic), dict) else None)
+            candidate = payload.get("candidate")
+            now = now_iso()
+            if isinstance(candidate, dict) and str(candidate.get("answer", "")).strip().lower() == clean_answer.lower():
+                signals = candidate.setdefault("signals", {})
+                signals["corrections"] = int(signals.get("corrections", 0)) + 1
+                if evidence.strip():
+                    ev = candidate.setdefault("evidence", [])
+                    if isinstance(ev, list):
+                        ev.append(evidence.strip())
+                candidate["confidence"] = self._rule_confidence(
+                    float(candidate.get("base_confidence", base_confidence)),
+                    int(signals.get("corrections", 0)),
+                    int(signals.get("confirmations", 0)),
+                    int(signals.get("supporting_sources", 0)),
+                    int(signals.get("contradictions", 0)),
+                )
+                candidate["last_updated"] = now
+                payload["candidate"] = candidate
+            else:
+                if isinstance(candidate, dict) and candidate:
+                    stale = dict(candidate)
+                    stale["status"] = "replaced_candidate"
+                    stale["timestamp"] = now
+                    payload["history"].append(stale)
+                payload["candidate"] = self._init_candidate(
+                    answer=clean_answer,
+                    source=source,
+                    base_confidence=base_confidence,
+                    evidence=evidence,
+                )
+            rules[topic] = {
+                "current": payload.get("current", {}),
+                "candidate": payload.get("candidate"),
+                "history": list(payload.get("history", []))[-100:],
+                "version": int(payload.get("version", 1)),
+            }
+            self._save()
+
+    def get_candidate_rule(self, topic: str, user_id: str | None = None) -> dict[str, Any] | None:
+        with self.lock:
+            state = self._state_no_lock(user_id)
+            payload = state["rules"].get(topic)
+            if not isinstance(payload, dict):
+                return None
+            candidate = payload.get("candidate")
+            return dict(candidate) if isinstance(candidate, dict) else None
+
+    def mark_candidate_signal(
+        self,
+        topic: str,
+        signal: str,
+        evidence: str = "",
+        user_id: str | None = None,
+    ) -> None:
+        key = signal.strip().lower()
+        if key not in {"confirmations", "supporting_sources", "contradictions", "corrections"}:
+            return
+        with self.lock:
+            state = self._state_no_lock(user_id)
+            payload = state["rules"].get(topic)
+            if not isinstance(payload, dict):
+                return
+            shaped = self._ensure_rule_shape(payload)
+            candidate = shaped.get("candidate")
+            if not isinstance(candidate, dict):
+                return
+            signals = candidate.setdefault("signals", {})
+            signals[key] = int(signals.get(key, 0)) + 1
+            candidate["confidence"] = self._rule_confidence(
+                float(candidate.get("base_confidence", 0.68)),
+                int(signals.get("corrections", 0)),
+                int(signals.get("confirmations", 0)),
+                int(signals.get("supporting_sources", 0)),
+                int(signals.get("contradictions", 0)),
+            )
+            if evidence.strip():
+                ev = candidate.setdefault("evidence", [])
+                if isinstance(ev, list):
+                    ev.append(evidence.strip())
+            candidate["last_updated"] = now_iso()
+            shaped["candidate"] = candidate
+            state["rules"][topic] = {
+                "current": shaped.get("current", {}),
+                "candidate": shaped.get("candidate"),
+                "history": list(shaped.get("history", []))[-100:],
+                "version": int(shaped.get("version", 1)),
+            }
+            self._save()
+
+    def promote_candidate_rule(
+        self,
+        topic: str,
+        min_confidence: float = 0.82,
+        min_support_signals: int = 2,
+        user_id: str | None = None,
+    ) -> bool:
+        with self.lock:
+            state = self._state_no_lock(user_id)
+            payload = state["rules"].get(topic)
+            if not isinstance(payload, dict):
+                return False
+            shaped = self._ensure_rule_shape(payload)
+            candidate = shaped.get("candidate")
+            if not isinstance(candidate, dict):
+                return False
+            signals = candidate.get("signals", {}) if isinstance(candidate.get("signals"), dict) else {}
+            support_total = (
+                int(signals.get("corrections", 0))
+                + int(signals.get("confirmations", 0))
+                + int(signals.get("supporting_sources", 0))
+            )
+            contradictions = int(signals.get("contradictions", 0))
+            conf = float(candidate.get("confidence", 0.0))
+            if contradictions > 0:
+                return False
+            if conf < float(min_confidence):
+                return False
+            if support_total < int(min_support_signals):
+                return False
+
+            current = shaped.get("current", {})
+            history = list(shaped.get("history", []))
+            if isinstance(current, dict) and current:
+                archived = dict(current)
+                archived["status"] = "outdated"
+                archived["timestamp"] = now_iso()
+                history.append(archived)
+
+            promoted = {
+                "answer": str(candidate.get("answer", "")).strip(),
+                "confidence": max(0.05, min(0.99, float(candidate.get("confidence", 0.5)))),
+                "source": f"{candidate.get('source', 'candidate')}+validated",
+                "status": "active",
+                "verified": True,
+                "source_count": max(1, support_total),
+                "timestamp": now_iso(),
+            }
+            state["rules"][topic] = {
+                "current": promoted,
+                "candidate": None,
+                "history": history[-100:],
+                "version": int(shaped.get("version", 1)) + 1,
+            }
+            self._save()
+            return True
+
+    def reject_candidate_rule(self, topic: str, reason: str = "rejected", user_id: str | None = None) -> bool:
+        with self.lock:
+            state = self._state_no_lock(user_id)
+            payload = state["rules"].get(topic)
+            if not isinstance(payload, dict):
+                return False
+            shaped = self._ensure_rule_shape(payload)
+            candidate = shaped.get("candidate")
+            if not isinstance(candidate, dict):
+                return False
+            archived = dict(candidate)
+            archived["status"] = str(reason or "rejected")
+            archived["timestamp"] = now_iso()
+            history = list(shaped.get("history", []))
+            history.append(archived)
+            state["rules"][topic] = {
+                "current": shaped.get("current", {}),
+                "candidate": None,
+                "history": history[-100:],
+                "version": int(shaped.get("version", 1)),
+            }
+            self._save()
+            return True
 
     def adjust_rule_confidence(self, topic: str, delta: float, user_id: str | None = None) -> None:
         with self.lock:
@@ -893,6 +1143,10 @@ class MemoryStore:
             graph = state.get("knowledge_graph", {})
             nodes = graph.get("nodes", {}) if isinstance(graph, dict) else {}
             edges = graph.get("edges", {}) if isinstance(graph, dict) else {}
+            pending_candidates = 0
+            for _topic, payload in state.get("rules", {}).items():
+                if isinstance(payload, dict) and isinstance(payload.get("candidate"), dict):
+                    pending_candidates += 1
             return {
                 "counts": {
                     "sessions": len(state.get("sessions", {})),
@@ -900,6 +1154,7 @@ class MemoryStore:
                     "experiences": len(state.get("experiences", [])),
                     "decision_logs": len(state.get("decision_logs", [])),
                     "rules": len(state.get("rules", {})),
+                    "pending_rule_candidates": pending_candidates,
                     "user_facts": len(state.get("user_facts", {})),
                     "corrections": len(state.get("corrections", [])),
                     "confirmations": len(state.get("confirmations", [])),

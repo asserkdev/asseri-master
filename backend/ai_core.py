@@ -683,6 +683,111 @@ class AICore:
             return fact
         return None
 
+    def _candidate_validation_signal(self, topic: str, candidate_answer: str) -> tuple[bool, str]:
+        normalized_topic = self._semantic_normalize(topic)
+        candidate_clean = self._strip_conf(candidate_answer).strip()
+        if not candidate_clean:
+            return False, "Empty candidate answer."
+
+        if self.math_engine.is_math_query(normalized_topic):
+            try:
+                solved = self.math_engine.solve(normalized_topic, force_steps=True)
+                expected = self._strip_conf(str(solved.get("answer", ""))).strip()
+                if expected:
+                    def _norm_math_value(text: str) -> str:
+                        body = self._strip_conf(text or "").strip()
+                        final_match = re.search(r"final answer\s*:\s*([^\n]+)", body, flags=re.IGNORECASE)
+                        if final_match:
+                            body = final_match.group(1).strip()
+                        else:
+                            lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+                            if lines:
+                                body = lines[-1]
+                        body = body.strip(" .")
+                        body = body.replace("\u2212", "-")
+                        body = re.sub(r"\s+", "", body.lower())
+                        return body
+
+                    def _parse_complex(text: str) -> complex | None:
+                        raw = _norm_math_value(text)
+                        if not raw:
+                            return None
+                        raw = raw.replace("i", "j")
+                        raw = re.sub(r"(\d+(?:\.\d+)?)\*j\b", r"\1j", raw)
+                        try:
+                            return complex(raw)
+                        except Exception:
+                            return None
+
+                    cand_norm = _norm_math_value(candidate_clean)
+                    exp_norm = _norm_math_value(expected)
+                    if cand_norm and exp_norm:
+                        cand_num = _parse_complex(cand_norm)
+                        exp_num = _parse_complex(exp_norm)
+                        if cand_num is not None and exp_num is not None:
+                            if abs(cand_num - exp_num) <= 1e-9:
+                                return True, "Consistent with internal math solver."
+                            return False, f"Conflicts with internal math solver result ({expected})."
+                        if cand_norm == exp_norm or cand_norm.endswith(exp_norm) or exp_norm in cand_norm:
+                            return True, "Consistent with internal math solver."
+                        return False, f"Conflicts with internal math solver result ({expected})."
+            except Exception:
+                pass
+
+        deterministic = self._deterministic_reasoning_answer(normalized_topic)
+        if deterministic and isinstance(deterministic, dict):
+            det_answer = self._strip_conf(str(deterministic.get("answer", ""))).strip()
+            if det_answer:
+                sim = self._path_consistency(candidate_clean, det_answer)
+                if sim >= 0.45:
+                    return True, "Consistent with deterministic reasoning path."
+                if sim <= 0.12:
+                    return False, "Conflicts with deterministic reasoning path."
+
+        internal = self._internal_knowledge_lookup(normalized_topic, normalized_topic)
+        if internal and isinstance(internal, dict):
+            internal_answer = self._strip_conf(str(internal.get("answer", ""))).strip()
+            if internal_answer:
+                sim = self._path_consistency(candidate_clean, internal_answer)
+                if sim >= 0.45:
+                    return True, "Consistent with curated internal knowledge."
+
+        web = self.search.search(normalized_topic)
+        web_answer = self._strip_conf(str(web.get("answer", ""))).strip()
+        web_refs = list(web.get("references", []))
+        if web_answer and "could not find a high-confidence summary" not in web_answer.lower():
+            sim = self._path_consistency(candidate_clean, web_answer)
+            source_rel = self._source_reliability(web_refs)
+            if sim >= 0.42 and source_rel >= 0.72:
+                return True, "Supported by trusted web evidence."
+            if sim <= 0.1 and source_rel >= 0.78:
+                return False, "Strong mismatch against trusted web evidence."
+        return False, "No strong external or internal support yet."
+
+    def _promote_candidate_if_ready(self, topic: str, user_id: str | None = None) -> tuple[bool, str]:
+        candidate = self.memory.get_candidate_rule(topic, user_id=user_id)
+        if not candidate or not isinstance(candidate, dict):
+            return False, "No candidate rule to evaluate."
+        candidate_answer = str(candidate.get("answer", "")).strip()
+        if not candidate_answer:
+            return False, "Candidate answer is empty."
+
+        supported, note = self._candidate_validation_signal(topic, candidate_answer)
+        if supported:
+            self.memory.mark_candidate_signal(topic, "supporting_sources", evidence=note, user_id=user_id)
+        elif "conflict" in note.lower() or "mismatch" in note.lower():
+            self.memory.mark_candidate_signal(topic, "contradictions", evidence=note, user_id=user_id)
+
+        promoted = self.memory.promote_candidate_rule(
+            topic,
+            min_confidence=0.82,
+            min_support_signals=2,
+            user_id=user_id,
+        )
+        if promoted:
+            return True, "Candidate promoted to active rule after validation."
+        return False, note
+
     @staticmethod
     def _is_likely_fictional_query(query: str) -> bool:
         q = re.sub(r"\s+", " ", query.lower()).strip()
@@ -1065,7 +1170,7 @@ class AICore:
         return {
             AICore._canon_token(t)
             for t in re.findall(r"[a-z0-9]+", text.lower())
-            if len(t) >= 2
+            if (len(t) >= 2 or t.isdigit() or t in {"x", "y", "z", "i"})
             and AICore._canon_token(t)
             not in {
                 "the",
@@ -1719,19 +1824,50 @@ class AICore:
             topic = self._topic_from_query(topic_text or raw)
             requested = self._assistant_requested_user_input(previous_assistant)
             if taught_value:
-                teach_conf = 0.9 if requested else 0.84
-                self.memory.upsert_rule(topic, taught_value, teach_conf, "user_teaching", user_id=user_id)
-                self.memory.update_topic_stats(topic, "confirmations", user_id=user_id)
-                conf = 0.91 if requested else 0.86
-                answer = self._attach_conf(
-                    f"Thanks. I learned this for '{topic}' and will use it in future answers.",
-                    conf,
+                base_conf = 0.74 if requested else 0.7
+                self.memory.submit_candidate_rule(
+                    topic,
+                    taught_value,
+                    "user_teaching",
+                    base_confidence=base_conf,
+                    evidence="user provided explicit teaching",
+                    user_id=user_id,
                 )
-                refs = [{"title": "Learned User Input", "url": f"memory://rules/{topic.replace(' ', '_')}"}]
-                reflection_steps = [
-                    "Detected user teaching input.",
-                    "Stored user-provided rule in memory.",
-                ]
+                if requested:
+                    self.memory.mark_candidate_signal(
+                        topic,
+                        "confirmations",
+                        evidence="assistant-requested teaching provided",
+                        user_id=user_id,
+                    )
+                promoted, note = self._promote_candidate_if_ready(topic, user_id=user_id)
+                if promoted:
+                    self.memory.update_topic_stats(topic, "confirmations", user_id=user_id)
+                    conf = 0.89
+                    answer = self._attach_conf(
+                        f"Thanks. I validated and activated your taught rule for '{topic}'.",
+                        conf,
+                    )
+                    reflection_steps = [
+                        "Detected user teaching input.",
+                        "Stored as candidate and validated against available evidence.",
+                        "Promoted candidate to active rule.",
+                    ]
+                else:
+                    conf = 0.78 if requested else 0.74
+                    answer = self._attach_conf(
+                        (
+                            f"Thanks. I saved your answer for '{topic}' as a pending rule, not final yet. "
+                            "I will promote it after enough confirmation or trusted evidence."
+                        ),
+                        conf,
+                    )
+                    reflection_steps = [
+                        "Detected user teaching input.",
+                        "Stored user-provided rule as candidate (quarantine mode).",
+                        f"Candidate not promoted yet: {note}",
+                    ]
+                refs = [{"title": "Candidate Learning Memory", "url": f"memory://rules/{topic.replace(' ', '_')}"}]
             else:
                 conf = 0.74
                 answer = self._attach_conf(
@@ -1827,6 +1963,64 @@ class AICore:
         if self._is_confirmation(raw):
             topic_text = self._latest_substantive_user_query(session_id, raw, user_id=user_id)
             topic = self._topic_from_query(topic_text or raw)
+            pending_candidate = self.memory.get_candidate_rule(topic, user_id=user_id)
+            if pending_candidate and isinstance(pending_candidate, dict):
+                self.memory.mark_candidate_signal(
+                    topic,
+                    "confirmations",
+                    evidence="user confirmed pending candidate",
+                    user_id=user_id,
+                )
+                promoted, note = self._promote_candidate_if_ready(topic, user_id=user_id)
+                conf = 0.9 if promoted else 0.82
+                if promoted:
+                    self.memory.update_topic_stats(topic, "confirmations", user_id=user_id)
+                    ack_text = "Noted. I validated the pending rule and promoted it to active knowledge."
+                    reflection_steps = [
+                        "User confirmation detected for pending candidate.",
+                        "Candidate validated and promoted.",
+                    ]
+                else:
+                    ack_text = (
+                        "Noted. I increased confidence for the pending rule, but it is still under verification."
+                    )
+                    reflection_steps = [
+                        "User confirmation detected for pending candidate.",
+                        f"Candidate remains pending: {note}",
+                    ]
+                answer = self._attach_conf(ack_text, conf)
+                refs = [{"title": "Candidate Learning Memory", "url": f"memory://rules/{topic.replace(' ', '_')}"}]
+                self.memory.append_message(session_id, "assistant", answer, user_id=user_id)
+                self.memory.record_experience(session_id, raw, answer, "feedback", conf, refs, user_id=user_id)
+                self._log_decision(
+                    session_id,
+                    "feedback",
+                    topic,
+                    conf,
+                    understanding_conf,
+                    refs,
+                    reflection_steps,
+                    {
+                        "base_model": round(conf, 3),
+                        "internal_reasoning": 0.83,
+                        "source_reliability": round(self._source_reliability(refs), 3),
+                        "consistency": 0.88,
+                        "history_signal": 0.82,
+                        "understanding": round(understanding_conf, 3),
+                    },
+                    user_id=user_id,
+                )
+                return {
+                    "session_id": session_id,
+                    "answer": answer,
+                    "intent": "feedback",
+                    "references": refs,
+                    "fuzzy_corrections": corrections,
+                    "confidence": int(round(conf * 100)),
+                    "reflection_steps": reflection_steps,
+                    "topic": topic,
+                    "related_concepts": self.memory.graph_neighbors(topic, limit=4, user_id=user_id),
+                }
             last_answer = self.memory.last_by_role(session_id, "assistant", user_id=user_id)
             confirmed_answer = self._strip_conf(last_answer)
             self.memory.record_confirmation(session_id, topic, last_answer, user_id=user_id)
@@ -1882,14 +2076,37 @@ class AICore:
 
             if corrected:
                 self.memory.record_correction(session_id, topic, failed, corrected, user_id=user_id)
-                self.memory.upsert_rule(topic, corrected, 0.86, "user_correction", user_id=user_id)
-                ack = f"Correction learned for '{topic}'. I replaced the conflicting rule with your correction."
-                refs = [{"title": "Learning Memory", "url": "internal://memory"}]
-                conf = 0.9
-                reflection_steps = [
-                    "User-provided corrected answer detected.",
-                    "Old rule confidence reduced; corrected rule stored with higher confidence.",
-                ]
+                self.memory.submit_candidate_rule(
+                    topic,
+                    corrected,
+                    "user_correction",
+                    base_confidence=0.7,
+                    evidence="explicit correction from user",
+                    user_id=user_id,
+                )
+                promoted, note = self._promote_candidate_if_ready(topic, user_id=user_id)
+                refs = [{"title": "Candidate Learning Memory", "url": f"memory://rules/{topic.replace(' ', '_')}"}]
+                if promoted:
+                    conf = 0.9
+                    ack = (
+                        f"Correction accepted for '{topic}'. I validated it and replaced the old rule safely."
+                    )
+                    reflection_steps = [
+                        "User-provided corrected answer detected.",
+                        "Stored correction as candidate and validated evidence.",
+                        "Promoted candidate and replaced conflicting rule.",
+                    ]
+                else:
+                    conf = 0.78
+                    ack = (
+                        f"I stored your correction for '{topic}' as a pending rule. "
+                        "I need one more confirmation or trusted evidence before replacing the active rule."
+                    )
+                    reflection_steps = [
+                        "User-provided corrected answer detected.",
+                        "Stored correction in candidate quarantine.",
+                        f"Candidate not promoted yet: {note}",
+                    ]
             else:
                 prev_query = self._latest_substantive_user_query(session_id, raw, user_id=user_id)
                 if prev_query:
@@ -1897,9 +2114,34 @@ class AICore:
                     failed_clean = self._strip_conf(failed).strip().lower()
                     alt_clean = self._strip_conf(alt_answer).strip().lower()
                     if alt_clean and alt_clean != failed_clean:
-                        self.memory.record_correction(session_id, topic, failed, alt_answer, user_id=user_id)
-                        ack = f"I logged the correction signal for '{topic}' and re-analyzed using an alternative path.\n{alt_answer}"
-                        reflection_steps = ["Correction signal without explicit fix."] + retry_steps
+                        self.memory.submit_candidate_rule(
+                            topic,
+                            alt_answer,
+                            "model_retry",
+                            base_confidence=0.6,
+                            evidence="alternative retry after correction signal",
+                            user_id=user_id,
+                        )
+                        promoted, note = self._promote_candidate_if_ready(topic, user_id=user_id)
+                        if promoted:
+                            ack = (
+                                f"I logged the correction signal for '{topic}', validated an alternative, and updated the rule.\n"
+                                f"{alt_answer}"
+                            )
+                            conf = max(conf, 0.82)
+                            reflection_steps = ["Correction signal without explicit fix."] + retry_steps + [
+                                "Alternative candidate validated and promoted.",
+                            ]
+                        else:
+                            ack = (
+                                f"I logged the correction signal for '{topic}' and found an alternative candidate:\n"
+                                f"{alt_answer}\n"
+                                "If this is correct, reply 'correct' and I will promote it."
+                            )
+                            conf = min(conf, 0.74)
+                            reflection_steps = ["Correction signal without explicit fix."] + retry_steps + [
+                                f"Alternative candidate pending: {note}",
+                            ]
                     else:
                         ack = (
                             f"I logged the correction for '{topic}', but my alternative path still looked unreliable. "
@@ -2027,7 +2269,13 @@ class AICore:
 
         learned = self.memory.get_rule(topic, user_id=user_id)
         can_reuse_learned = intent in {"knowledge", "problem_solving"}
-        if can_reuse_learned and learned and isinstance(learned.get("current"), dict) and float(learned["current"].get("confidence", 0.0)) >= 0.8:
+        if (
+            can_reuse_learned
+            and learned
+            and isinstance(learned.get("current"), dict)
+            and float(learned["current"].get("confidence", 0.0)) >= 0.8
+            and bool(learned["current"].get("verified", True))
+        ):
             base_answer = str(learned["current"].get("answer", "")).strip()
             refs = [{"title": "Learned Memory Rule", "url": f"memory://rules/{topic.replace(' ', '_')}"}]
             base_conf = float(learned["current"].get("confidence", 0.8))
