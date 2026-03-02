@@ -869,13 +869,18 @@ class MemoryStore:
                 + int(signals.get("confirmations", 0))
                 + int(signals.get("supporting_sources", 0))
             )
+            support_sources = int(signals.get("supporting_sources", 0))
             contradictions = int(signals.get("contradictions", 0))
             conf = float(candidate.get("confidence", 0.0))
+            source = str(candidate.get("source", "")).strip().lower()
             if contradictions > 0:
                 return False
             if conf < float(min_confidence):
                 return False
             if support_total < int(min_support_signals):
+                return False
+            if source.startswith("user_") and support_sources < 1:
+                # Prevent blind promotion from repeated user-only confirmations.
                 return False
 
             current = shaped.get("current", {})

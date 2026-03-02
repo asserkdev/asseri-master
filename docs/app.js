@@ -14,6 +14,7 @@ const API_BASE = resolveApiBase();
 const AUTH_TOKEN_KEY = "asseri_auth_token";
 const AUTH_USER_KEY = "asseri_auth_user";
 const DRAFT_KEY_PREFIX = "asseri_draft_";
+const TONE_MODE_KEY = "asseri_tone_mode";
 
 function apiUrl(path) {
   if (/^https?:\/\//i.test(path)) {
@@ -53,6 +54,8 @@ const state = {
   messageCounter: 0,
   sessionTags: [],
   sessionPins: [],
+  toneMode: "friendly",
+  safetyActive: false,
 };
 
 const ui = {
@@ -71,6 +74,9 @@ const ui = {
   signOutBtn: document.getElementById("signOutBtn"),
   authState: document.getElementById("authState"),
   authBadge: document.getElementById("authBadge"),
+  safetyBadge: document.getElementById("safetyBadge"),
+  toneSelect: document.getElementById("toneSelect"),
+  applyToneBtn: document.getElementById("applyToneBtn"),
   continueBtn: document.getElementById("continueBtn"),
   regenerateBtn: document.getElementById("regenerateBtn"),
   exportBtn: document.getElementById("exportBtn"),
@@ -85,6 +91,15 @@ ui.chatSendBtn = ui.chatForm ? ui.chatForm.querySelector("button[type='submit']"
 
 function setStatus(text) {
   ui.statusText.textContent = text;
+}
+
+function setSafetyBadge(active) {
+  state.safetyActive = Boolean(active);
+  if (!ui.safetyBadge) {
+    return;
+  }
+  ui.safetyBadge.textContent = state.safetyActive ? "Safety: Active" : "Safety: Normal";
+  ui.safetyBadge.classList.toggle("alert", state.safetyActive);
 }
 
 function setLoading(flag) {
@@ -102,6 +117,14 @@ function setStoredAuth(token, userId) {
   } else {
     localStorage.removeItem(AUTH_USER_KEY);
   }
+}
+
+function setStoredToneMode(tone) {
+  if (!tone) {
+    localStorage.removeItem(TONE_MODE_KEY);
+    return;
+  }
+  localStorage.setItem(TONE_MODE_KEY, tone);
 }
 
 function authHeaders(extra = {}) {
@@ -127,6 +150,8 @@ function setChatEnabled(flag) {
   if (ui.chatSendBtn) {
     ui.chatSendBtn.disabled = !flag;
   }
+  if (ui.toneSelect) ui.toneSelect.disabled = !flag;
+  if (ui.applyToneBtn) ui.applyToneBtn.disabled = !flag;
 }
 
 function setAuthUI(isSignedIn) {
@@ -140,6 +165,7 @@ function setAuthUI(isSignedIn) {
     ui.authPassword.value = "";
     ui.authPassword.disabled = true;
     setChatEnabled(true);
+    setSafetyBadge(false);
   } else {
     ui.authState.textContent = "Signed out";
     ui.authBadge.textContent = "Signed out";
@@ -148,6 +174,13 @@ function setAuthUI(isSignedIn) {
     ui.authUsername.disabled = false;
     ui.authPassword.disabled = false;
     setChatEnabled(false);
+    setSafetyBadge(false);
+  }
+}
+
+function syncToneUI() {
+  if (ui.toneSelect) {
+    ui.toneSelect.value = state.toneMode;
   }
 }
 
@@ -480,6 +513,33 @@ function normalizeUserMessage(raw) {
   return text;
 }
 
+function isLikelySafetyMessage(text) {
+  const low = String(text || "").toLowerCase();
+  return (
+    low.includes("cannot help with harmful or illegal actions") ||
+    low.includes("cannot assist with violence or harm") ||
+    low.includes("suicide & crisis lifeline") ||
+    low.includes("call or text 988")
+  );
+}
+
+async function applyToneMode(mode) {
+  const valid = ["formal", "friendly", "casual", "chill", "direct"];
+  const tone = String(mode || "").trim().toLowerCase();
+  if (!valid.includes(tone)) {
+    renderMessage("assistant", "Tone must be one of: formal, friendly, casual, chill, direct.");
+    return;
+  }
+  state.toneMode = tone;
+  setStoredToneMode(tone);
+  syncToneUI();
+  if (!state.authToken) {
+    setStatus(`Tone set to ${tone} locally. Sign in to apply server-side.`);
+    return;
+  }
+  await sendChatMessage(`set tone to ${tone}`);
+}
+
 function renderSessions() {
   ui.sessionsList.innerHTML = "";
   for (const session of state.sessions) {
@@ -521,6 +581,7 @@ function resetChatState() {
   state.lastAssistantTopic = null;
   state.sessionTags = [];
   state.sessionPins = [];
+  setSafetyBadge(false);
   ui.chatTitle.textContent = "Session";
   clearMessages();
   renderSessions();
@@ -546,6 +607,7 @@ function applyChatPayload(payload) {
   state.sessionId = payload.session_id;
   ui.chatTitle.textContent = payload.session_id;
   state.lastAssistantTopic = payload.topic || null;
+  setSafetyBadge(String(payload.intent || "").toLowerCase() === "safety");
   renderMessage("assistant", formatAssistantText(payload), payload.references || [], {
     confidence: payload.confidence,
     intent: payload.intent,
@@ -608,6 +670,7 @@ async function loadSession(sessionId) {
   ui.chatTitle.textContent = payload.session_id;
   state.sessionTags = Array.isArray(payload.tags) ? payload.tags : [];
   state.sessionPins = Array.isArray(payload.pins) ? payload.pins : [];
+  setSafetyBadge(false);
   clearMessages();
   for (let idx = 0; idx < (payload.history || []).length; idx += 1) {
     const msg = payload.history[idx];
@@ -619,6 +682,9 @@ async function loadSession(sessionId) {
       messageIndex: idx,
     };
     renderMessage(role, msg.content || "", [], meta);
+    if (role === "assistant" && isLikelySafetyMessage(msg.content || "")) {
+      setSafetyBadge(true);
+    }
     state.messageCounter = idx + 1;
   }
   renderSessions();
@@ -961,6 +1027,7 @@ async function handleSlashCommand(rawText) {
         "/pins",
         "/tags [comma,separated]",
         "/mode [simple|standard|advanced]",
+        "/tone [formal|friendly|casual|chill|direct]",
         "/delete",
       ].join("\n"),
       [],
@@ -1030,6 +1097,15 @@ async function handleSlashCommand(rawText) {
       return true;
     }
     await sendChatMessage(`set response mode to ${mode}`);
+    return true;
+  }
+  if (cmd === "tone") {
+    const tone = (parts[0] || "").toLowerCase().trim();
+    if (!tone) {
+      await sendChatMessage("what is my tone mode");
+      return true;
+    }
+    await applyToneMode(tone);
     return true;
   }
   if (cmd === "delete") {
@@ -1155,6 +1231,13 @@ if (ui.tagsBtn) {
   });
 }
 
+if (ui.applyToneBtn) {
+  ui.applyToneBtn.addEventListener("click", async () => {
+    const tone = ui.toneSelect ? ui.toneSelect.value : "";
+    await applyToneMode(tone);
+  });
+}
+
 if (ui.searchBtn && ui.searchInput) {
   ui.searchBtn.addEventListener("click", async () => {
     await searchInSession(ui.searchInput.value);
@@ -1207,6 +1290,12 @@ ui.chatForm.addEventListener("submit", async (event) => {
 async function boot() {
   setStatus("Loading...");
   localStorage.removeItem("asseri_user_id");
+  state.toneMode = (localStorage.getItem(TONE_MODE_KEY) || "friendly").toLowerCase();
+  if (!["formal", "friendly", "casual", "chill", "direct"].includes(state.toneMode)) {
+    state.toneMode = "friendly";
+  }
+  syncToneUI();
+  setSafetyBadge(false);
 
   if (!API_BASE && (window.location.hostname.endsWith("github.io") || window.location.pathname.startsWith("/docs"))) {
     renderMessage(

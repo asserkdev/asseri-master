@@ -4,6 +4,7 @@ import re
 from typing import Any
 
 from .fuzzy_match import FuzzyMatcher
+from .human_layer import HumanLayer
 from .math_engine import MathEngine
 from .memory import MemoryStore
 from .search_module import SearchModule
@@ -24,6 +25,7 @@ class AICore:
         self.search = search
         self.math_engine = math_engine
         self.fuzzy = fuzzy
+        self.human = HumanLayer()
         self._seed_graph()
 
     def _seed_graph(self) -> None:
@@ -109,6 +111,8 @@ class AICore:
             "do you remember me",
             "response mode",
             "my mode",
+            "tone",
+            "style",
         ]
         return any(p in t for p in patterns)
 
@@ -134,6 +138,8 @@ class AICore:
             "your confidence",
             "response mode",
             "my mode",
+            "tone",
+            "style",
         ]
         if any(p in t for p in direct):
             return True
@@ -258,6 +264,43 @@ class AICore:
         if stored in self.RESPONSE_MODES:
             return stored, "user_profile"
         return "standard", "default"
+
+    def _extract_tone_command(self, text: str) -> str | None:
+        return self.human.extract_tone_command(text)
+
+    def _stored_tone_mode(self, user_id: str | None = None) -> str:
+        payload = self.memory.get_user_fact("tone_mode", user_id=user_id)
+        if not payload or not isinstance(payload.get("current"), dict):
+            return "friendly"
+        value = str(payload["current"].get("value", "")).strip().lower()
+        return value if value in HumanLayer.TONES else "friendly"
+
+    def _resolve_tone_mode(self, query: str, user_id: str | None = None) -> tuple[str, str]:
+        stored = self._stored_tone_mode(user_id=user_id)
+        return self.human.infer_tone(query, stored_tone=stored)
+
+    def _learning_rate_limited(self, session_id: str, user_id: str | None = None) -> bool:
+        history = self.memory.get_history(session_id, user_id=user_id)
+        if not history:
+            return False
+        recent = history[-30:]
+        feedback_signals = 0
+        for msg in recent:
+            if str(msg.get("role", "")).lower() != "user":
+                continue
+            content = str(msg.get("content", "")).strip()
+            if self._is_feedback_like_text(content):
+                feedback_signals += 1
+        return feedback_signals >= 10
+
+    def _learning_guard(self, topic: str, candidate_answer: str) -> tuple[bool, str]:
+        ok, note = self.human.learning_guard(topic, candidate_answer)
+        if not ok:
+            return False, note
+        safe_block = self.human.safety_response(candidate_answer)
+        if safe_block:
+            return False, "Candidate conflicts with safety policy."
+        return True, note
 
     @staticmethod
     def _extract_teaching_value(text: str) -> str | None:
@@ -1010,6 +1053,13 @@ class AICore:
                 "answer": f"Your response mode is '{mode}'. You can change it by saying: set response mode to simple|standard|advanced.",
                 "confidence": 0.92,
                 "references": [{"title": "User Preferences", "url": "memory://user-facts/response_mode"}],
+            }
+        if any(k in q for k in ["tone mode", "my tone", "what tone", "tone am i using"]):
+            tone = self._stored_tone_mode(user_id=user_id)
+            return {
+                "answer": f"Your tone mode is '{tone}'. You can change it by saying: set tone to formal|friendly|casual|chill|direct.",
+                "confidence": 0.92,
+                "references": [{"title": "User Preferences", "url": "memory://user-facts/tone_mode"}],
             }
         if self._is_perform_request(q):
             tail = q[5:].strip() if q.startswith("sing ") else ""
@@ -1826,12 +1876,144 @@ class AICore:
                 "related_concepts": self.memory.graph_neighbors(topic, limit=4, user_id=user_id),
             }
 
+        tone_cmd = self._extract_tone_command(raw)
+        if tone_cmd:
+            self.memory.remember_user_fact("tone_mode", tone_cmd, confidence=0.97, source="user_preference", user_id=user_id)
+            topic = self._topic_from_query("tone mode")
+            conf = 0.95
+            answer = self._attach_conf(
+                f"Tone set to '{tone_cmd}'. I will adapt how I respond.",
+                conf,
+            )
+            refs = [{"title": "User Preferences", "url": "memory://user-facts/tone_mode"}]
+            reflection_steps = [
+                "Detected explicit tone preference command.",
+                "Stored tone preference in per-user profile memory.",
+            ]
+            self.memory.record_experience(session_id, raw, answer, "feedback", conf, refs, user_id=user_id)
+            self.memory.append_message(session_id, "assistant", answer, user_id=user_id)
+            self._log_decision(
+                session_id,
+                "feedback",
+                topic,
+                conf,
+                understanding_conf,
+                refs,
+                reflection_steps,
+                {
+                    "base_model": round(conf, 3),
+                    "internal_reasoning": 0.86,
+                    "source_reliability": 0.86,
+                    "consistency": 0.94,
+                    "history_signal": 0.85,
+                    "understanding": round(understanding_conf, 3),
+                },
+                user_id=user_id,
+            )
+            return {
+                "session_id": session_id,
+                "answer": answer,
+                "intent": "feedback",
+                "references": refs,
+                "fuzzy_corrections": corrections,
+                "confidence": int(round(conf * 100)),
+                "reflection_steps": reflection_steps,
+                "topic": topic,
+                "related_concepts": self.memory.graph_neighbors(topic, limit=4, user_id=user_id),
+            }
+
+        safety = self.human.safety_response(raw or normalized)
+        if safety:
+            topic = self._topic_from_query(normalized or raw)
+            conf = float(safety.get("confidence", 0.94))
+            answer = self._attach_conf(str(safety.get("answer", "")).strip(), conf)
+            refs = list(safety.get("references", []))
+            reflection_steps = [
+                "Safety policy check triggered.",
+                f"Category: {safety.get('category', 'general')}.",
+                "Returned safe response and stopped unsafe generation path.",
+            ]
+            self.memory.record_experience(session_id, raw, answer, "safety", conf, refs, user_id=user_id)
+            self.memory.append_message(session_id, "assistant", answer, user_id=user_id)
+            self._log_decision(
+                session_id,
+                "safety",
+                topic,
+                conf,
+                understanding_conf,
+                refs,
+                reflection_steps,
+                {
+                    "base_model": round(conf, 3),
+                    "internal_reasoning": 0.9,
+                    "source_reliability": round(self._source_reliability(refs), 3),
+                    "consistency": 0.96,
+                    "history_signal": 0.8,
+                    "understanding": round(understanding_conf, 3),
+                },
+                user_id=user_id,
+            )
+            return {
+                "session_id": session_id,
+                "answer": answer,
+                "intent": "safety",
+                "references": refs,
+                "fuzzy_corrections": corrections,
+                "confidence": int(round(conf * 100)),
+                "reflection_steps": reflection_steps,
+                "topic": topic,
+                "related_concepts": [],
+            }
+
         if self._is_teaching_input(raw):
             taught_value = self._extract_teaching_value(raw)
             topic_text = self._latest_substantive_user_query(session_id, raw, user_id=user_id)
             topic = self._topic_from_query(topic_text or raw)
             requested = self._assistant_requested_user_input(previous_assistant)
             if taught_value:
+                safe_to_learn, learn_note = self._learning_guard(topic, taught_value)
+                if not safe_to_learn:
+                    conf = 0.7
+                    answer = self._attach_conf(
+                        f"I did not store that learning input for '{topic}' because it failed safety checks: {learn_note}",
+                        conf,
+                    )
+                    refs = [{"title": "Learning Guardrails", "url": "internal://learning-guardrails"}]
+                    reflection_steps = [
+                        "Detected user teaching input.",
+                        "Learning guardrail blocked candidate update.",
+                    ]
+                    self.memory.record_experience(session_id, raw, answer, "feedback", conf, refs, user_id=user_id)
+                    self.memory.append_message(session_id, "assistant", answer, user_id=user_id)
+                    self._log_decision(
+                        session_id,
+                        "feedback",
+                        topic,
+                        conf,
+                        understanding_conf,
+                        refs,
+                        reflection_steps,
+                        {
+                            "base_model": round(conf, 3),
+                            "internal_reasoning": 0.72,
+                            "source_reliability": round(self._source_reliability(refs), 3),
+                            "consistency": 0.81,
+                            "history_signal": 0.7,
+                            "understanding": round(understanding_conf, 3),
+                        },
+                        user_id=user_id,
+                    )
+                    return {
+                        "session_id": session_id,
+                        "answer": answer,
+                        "intent": "feedback",
+                        "references": refs,
+                        "fuzzy_corrections": corrections,
+                        "confidence": int(round(conf * 100)),
+                        "reflection_steps": reflection_steps,
+                        "topic": topic,
+                        "related_concepts": self.memory.graph_neighbors(topic, limit=4, user_id=user_id),
+                    }
                 base_conf = 0.74 if requested else 0.7
                 self.memory.submit_candidate_rule(
                     topic,
@@ -1848,7 +2030,11 @@ class AICore:
                         evidence="assistant-requested teaching provided",
                         user_id=user_id,
                     )
-                promoted, note = self._promote_candidate_if_ready(topic, user_id=user_id)
+                if self._learning_rate_limited(session_id, user_id=user_id):
+                    promoted = False
+                    note = "Learning updates are temporarily rate-limited for safety."
+                else:
+                    promoted, note = self._promote_candidate_if_ready(topic, user_id=user_id)
                 if promoted:
                     self.memory.update_topic_stats(topic, "confirmations", user_id=user_id)
                     conf = 0.89
@@ -2083,6 +2269,50 @@ class AICore:
             self.memory.adjust_rule_confidence(topic, -0.18, user_id=user_id)
 
             if corrected:
+                safe_to_learn, learn_note = self._learning_guard(topic, corrected)
+                if not safe_to_learn:
+                    conf = 0.7
+                    ack = (
+                        f"I logged your correction for '{topic}', but I did not apply it yet because it failed "
+                        f"learning safety checks: {learn_note}"
+                    )
+                    refs = [{"title": "Learning Guardrails", "url": "internal://learning-guardrails"}]
+                    reflection_steps = [
+                        "User-provided corrected answer detected.",
+                        "Learning guardrail blocked candidate update.",
+                    ]
+                    answer = self._attach_conf(ack, conf)
+                    self.memory.append_message(session_id, "assistant", answer, user_id=user_id)
+                    self.memory.record_experience(session_id, raw, answer, "feedback", conf, refs, user_id=user_id)
+                    self._log_decision(
+                        session_id,
+                        "feedback",
+                        topic,
+                        conf,
+                        understanding_conf,
+                        refs,
+                        reflection_steps,
+                        {
+                            "base_model": round(conf, 3),
+                            "internal_reasoning": 0.76,
+                            "source_reliability": round(self._source_reliability(refs), 3),
+                            "consistency": 0.82,
+                            "history_signal": 0.64,
+                            "understanding": round(understanding_conf, 3),
+                        },
+                        user_id=user_id,
+                    )
+                    return {
+                        "session_id": session_id,
+                        "answer": answer,
+                        "intent": "feedback",
+                        "references": refs,
+                        "fuzzy_corrections": corrections,
+                        "confidence": int(round(conf * 100)),
+                        "reflection_steps": reflection_steps,
+                        "topic": topic,
+                        "related_concepts": self.memory.graph_neighbors(topic, limit=4, user_id=user_id),
+                    }
                 self.memory.record_correction(session_id, topic, failed, corrected, user_id=user_id)
                 self.memory.submit_candidate_rule(
                     topic,
@@ -2092,7 +2322,11 @@ class AICore:
                     evidence="explicit correction from user",
                     user_id=user_id,
                 )
-                promoted, note = self._promote_candidate_if_ready(topic, user_id=user_id)
+                if self._learning_rate_limited(session_id, user_id=user_id):
+                    promoted = False
+                    note = "Learning updates are temporarily rate-limited for safety."
+                else:
+                    promoted, note = self._promote_candidate_if_ready(topic, user_id=user_id)
                 refs = [{"title": "Candidate Learning Memory", "url": f"memory://rules/{topic.replace(' ', '_')}"}]
                 if promoted:
                     conf = 0.9
@@ -2122,6 +2356,49 @@ class AICore:
                     failed_clean = self._strip_conf(failed).strip().lower()
                     alt_clean = self._strip_conf(alt_answer).strip().lower()
                     if alt_clean and alt_clean != failed_clean:
+                        safe_to_learn, learn_note = self._learning_guard(topic, alt_answer)
+                        if not safe_to_learn:
+                            ack = (
+                                f"I logged the correction for '{topic}', but I rejected the alternative candidate "
+                                f"due to learning safety checks: {learn_note}"
+                            )
+                            refs = [{"title": "Learning Guardrails", "url": "internal://learning-guardrails"}]
+                            conf = 0.67
+                            reflection_steps = ["Correction signal without explicit fix."] + retry_steps + [
+                                "Alternative candidate blocked by learning guardrails.",
+                            ]
+                            answer = self._attach_conf(ack, conf)
+                            self.memory.append_message(session_id, "assistant", answer, user_id=user_id)
+                            self.memory.record_experience(session_id, raw, answer, "feedback", conf, refs, user_id=user_id)
+                            self._log_decision(
+                                session_id,
+                                "feedback",
+                                topic,
+                                conf,
+                                understanding_conf,
+                                refs,
+                                reflection_steps,
+                                {
+                                    "base_model": round(conf, 3),
+                                    "internal_reasoning": 0.73,
+                                    "source_reliability": round(self._source_reliability(refs), 3),
+                                    "consistency": 0.72,
+                                    "history_signal": 0.6,
+                                    "understanding": round(understanding_conf, 3),
+                                },
+                                user_id=user_id,
+                            )
+                            return {
+                                "session_id": session_id,
+                                "answer": answer,
+                                "intent": "feedback",
+                                "references": refs,
+                                "fuzzy_corrections": corrections,
+                                "confidence": int(round(conf * 100)),
+                                "reflection_steps": reflection_steps,
+                                "topic": topic,
+                                "related_concepts": self.memory.graph_neighbors(topic, limit=4, user_id=user_id),
+                            }
                         self.memory.submit_candidate_rule(
                             topic,
                             alt_answer,
@@ -2130,7 +2407,11 @@ class AICore:
                             evidence="alternative retry after correction signal",
                             user_id=user_id,
                         )
-                        promoted, note = self._promote_candidate_if_ready(topic, user_id=user_id)
+                        if self._learning_rate_limited(session_id, user_id=user_id):
+                            promoted = False
+                            note = "Learning updates are temporarily rate-limited for safety."
+                        else:
+                            promoted, note = self._promote_candidate_if_ready(topic, user_id=user_id)
                         if promoted:
                             ack = (
                                 f"I logged the correction signal for '{topic}', validated an alternative, and updated the rule.\n"
@@ -2397,6 +2678,13 @@ class AICore:
                 reflected_answer = rewritten
             if response_mode != "standard":
                 reflection_steps.append(f"Applied response mode '{response_mode}' from {mode_source}.")
+
+        tone_mode, tone_source = self._resolve_tone_mode(raw, user_id=user_id)
+        toned = self.human.rewrite_tone(reflected_answer, tone_mode, intent)
+        if toned:
+            reflected_answer = toned
+        if tone_source != "default":
+            reflection_steps.append(f"Applied tone mode '{tone_mode}' from {tone_source}.")
 
         final_answer = self._attach_conf(reflected_answer, final_conf)
         self.memory.update_topic_stats(topic, "answers", user_id=user_id)
