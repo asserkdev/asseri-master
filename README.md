@@ -12,6 +12,7 @@ asseri/
     routes.py
     ai_core.py
     accuracy_policy.py
+    query_planner.py          # Route planner (clarify/internal/web/hybrid)
     search_module.py
     math_engine.py
     compute_engine.py          # Python/NumPy/Torch-CUDA compute router
@@ -52,8 +53,17 @@ asseri/
 - Intent routing (`math`, `knowledge`, `problem_solving`, `casual`)
 - Internal math/logic engine with step-by-step answers
 - Online search integration with relevance/trust filtering
+- Query planning to choose clarify vs internal vs web/hybrid route
 - Fuzzy text understanding and typo correction
 - Safe correction-based learning with confidence tracking
+- Similar-experience memory retrieval for closer repeated answers
+- Contradiction-aware memory retrieval (respects later corrections)
+- Ambiguous entity disambiguation prompts (e.g., python/java/apple)
+- Internal propositional logic handling (modus ponens-style queries)
+- Multi-hop reasoning for comparison-style prompts
+- Consensus voting across internal/memory/web candidates
+- Self-critique second-pass repair for low-confidence/fact-check turns
+- Strict fact-check mode via query phrasing (`verify`, `fact check`, `double check`)
 - Confidence score and references on each answer
 - Decision logging and learning overview endpoints
 - Optional compute acceleration path (Torch CUDA -> NumPy -> Python)
@@ -103,6 +113,11 @@ Environment variable overrides still work, for example:
 - `bash scripts/run_backend.sh`
 - `bash scripts/train_model.sh`
 - `bash scripts/build_native.sh`
+- `bash scripts/run_quality_eval.sh`
+
+Quality benchmark output is written to:
+
+- `backend/data/quality_report.json`
 
 ## API Endpoints
 
@@ -126,5 +141,7 @@ Environment variable overrides still work, for example:
 
 GitHub Pages serves only static frontend. Python backend must run on a host (Render/Fly/VM).
 
-- Pages URL: `https://<user>.github.io/<repo>/`
-- Backend URL can be passed as query: `?api=https://<backend-host>`
+- Pages URL: `http://asserkdev.github.io/asseri-master/`
+- Backend URL: `https://asseri--asserkdev.replit.app`
+- Default behavior: when opened from the Pages URL above, the app auto-connects to the Replit backend.
+- Optional override: pass `?api=<custom-backend-url>` in the query string.

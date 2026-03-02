@@ -8,6 +8,7 @@ from .fuzzy_match import FuzzyMatcher
 from .human_layer import HumanLayer
 from .math_engine import MathEngine
 from .memory import MemoryStore
+from .query_planner import QueryPlanner
 from .search_module import SearchModule
 
 
@@ -28,6 +29,7 @@ class AICore:
         self.fuzzy = fuzzy
         self.human = HumanLayer()
         self.accuracy = AccuracyPolicy()
+        self.planner = QueryPlanner()
         self._seed_graph()
 
     def _seed_graph(self) -> None:
@@ -486,6 +488,67 @@ class AICore:
                 }
         return None
 
+    def _memory_retrieval_candidate(
+        self,
+        query: str,
+        intent: str,
+        topic: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if intent not in {"knowledge", "problem_solving"}:
+            return None
+        normalized_topic = self._topic_from_query(topic or query)
+        hits = self.memory.find_similar_experiences(query, user_id=user_id, limit=3, min_score=0.52)
+        if not hits:
+            return None
+        best = hits[0]
+        answer = self._strip_conf(str(best.get("assistant", ""))).strip()
+        if not answer:
+            return None
+        low = answer.lower()
+        if any(
+            marker in low
+            for marker in [
+                "could not find a high-confidence summary",
+                "i may be matching the wrong topic",
+                "please clarify",
+                "i encountered an internal error",
+            ]
+        ):
+            return None
+        last_correction = self.memory.latest_topic_correction(normalized_topic, user_id=user_id)
+        if last_correction and isinstance(last_correction, dict):
+            corr_ts = str(last_correction.get("timestamp", "")).strip()
+            hit_ts = str(best.get("timestamp", "")).strip()
+            corrected_answer = self._strip_conf(str(last_correction.get("corrected_answer", ""))).strip()
+            if corr_ts and hit_ts and hit_ts <= corr_ts:
+                return None
+            if corrected_answer:
+                sim_to_corrected = self._path_consistency(answer, corrected_answer)
+                if sim_to_corrected < 0.22:
+                    return None
+        retrieved_conf = float(best.get("confidence", 0.0))
+        similarity = float(best.get("score", 0.0))
+        confidence = self._clamp(max(0.65, min(0.9, (retrieved_conf * 0.78) + (similarity * 0.22))))
+        refs = self._merge_references(
+            list(best.get("references", [])),
+            [{"title": "Similar Learned Experience", "url": "memory://experiences/similar"}],
+        )
+        return {
+            "answer": answer,
+            "confidence": confidence,
+            "intent": intent,
+            "references": refs,
+            "reasoning_steps": [
+                "Retrieved a highly similar previous user query from memory.",
+                f"Similarity score: {round(similarity, 3)}.",
+                "Reused validated prior answer as candidate path.",
+            ],
+            "direct_reasoning": True,
+            "from_memory_retrieval": True,
+            "retrieval_score": similarity,
+        }
+
     @staticmethod
     def _norm_entity(text: str) -> str:
         t = re.sub(r"[^a-z0-9\s]", "", text.lower()).strip()
@@ -740,7 +803,274 @@ class AICore:
                 }
         return None
 
+    @staticmethod
+    def _extract_definition_subject(query: str) -> str:
+        q = re.sub(r"\s+", " ", str(query or "").strip().lower())
+        for prefix in ["what is ", "what are ", "who is ", "tell me about ", "explain "]:
+            if q.startswith(prefix):
+                q = q[len(prefix) :].strip()
+                break
+        q = q.strip(" .?!")
+        return q
+
+    def _entity_disambiguation_answer(self, query: str) -> dict[str, Any] | None:
+        q = re.sub(r"\s+", " ", str(query or "").strip().lower())
+        if not re.match(r"^(what is|what are|who is|tell me about|explain)\s+", q):
+            return None
+        subject = self._extract_definition_subject(q)
+        if not subject:
+            return None
+        subject_tokens = re.findall(r"[a-z0-9]+", subject)
+        if len(subject_tokens) > 2:
+            return None
+
+        if any(k in q for k in ["programming", "language", "snake", "fruit", "company", "planet", "element", "river", "rainforest", "coffee"]):
+            return None
+
+        ambiguous_map = {
+            "python": ["Python programming language", "Python snake (genus)"],
+            "java": ["Java programming language", "Java island", "coffee (java)"],
+            "apple": ["Apple Inc. (technology company)", "apple fruit"],
+            "mercury": ["Mercury (planet)", "Mercury (chemical element)", "Mercury (mythology)"],
+            "amazon": ["Amazon company", "Amazon River", "Amazon rainforest"],
+        }
+        if subject not in ambiguous_map:
+            return None
+        choices = ambiguous_map[subject]
+        choice_lines = [f"{idx + 1}. {item}" for idx, item in enumerate(choices)]
+        answer = (
+            f"The term '{subject}' is ambiguous. Please pick what you mean:\n"
+            + "\n".join(choice_lines)
+            + "\nReply with the number or exact option name, and I will answer precisely."
+        )
+        return {
+            "answer": answer,
+            "confidence": 0.9,
+            "intent": "clarification",
+            "references": [{"title": "Entity Disambiguation", "url": "internal://disambiguation"}],
+            "reasoning_steps": [
+                "Detected short definition query for an ambiguous entity term.",
+                "Found multiple high-probability senses.",
+                "Requested explicit disambiguation before answering.",
+            ],
+            "direct_reasoning": True,
+        }
+
+    def _propositional_logic_answer(self, query: str) -> dict[str, Any] | None:
+        q = re.sub(r"\s+", " ", str(query or "").strip().lower())
+        q = q.strip(" .?!")
+
+        def norm_clause(text: str) -> str:
+            out = re.sub(r"[^a-z0-9\s]", " ", text.lower())
+            out = re.sub(r"^\s*if\s+", "", out)
+            out = re.sub(r"\b(the|a|an)\b", " ", out)
+            out = re.sub(r"\s+", " ", out).strip()
+            return out
+
+        def negate_clause(text: str) -> str:
+            body = norm_clause(text)
+            if body.startswith("not "):
+                return body[4:].strip()
+            return f"not {body}".strip()
+
+        m = re.match(r"^if (.+?) then (.+?),? and (.+?), does it(?: logically)? follow that (.+)$", q)
+        if m:
+            antecedent = norm_clause(m.group(1))
+            consequent = norm_clause(m.group(2))
+            fact = norm_clause(m.group(3))
+            conclusion = norm_clause(m.group(4))
+            if not antecedent or not consequent or not fact or not conclusion:
+                return None
+            fact_matches = self._path_consistency(fact, antecedent) >= 0.5
+            concl_matches = self._path_consistency(conclusion, consequent) >= 0.5
+            if fact_matches and concl_matches:
+                return {
+                    "answer": "Yes. This is a valid modus ponens step: if P->Q and P, then Q.",
+                    "confidence": 0.93,
+                    "intent": "problem_solving",
+                    "references": [{"title": "Propositional Logic", "url": "internal://logic/propositional"}],
+                    "reasoning_steps": [
+                        "Detected conditional implication pattern.",
+                        "Matched premise P and implication P -> Q.",
+                        "Applied modus ponens to conclude Q.",
+                    ],
+                    "direct_reasoning": True,
+                }
+            if fact_matches and not concl_matches:
+                return {
+                    "answer": "No. From if P->Q and P, the valid conclusion is Q, not the requested statement.",
+                    "confidence": 0.9,
+                    "intent": "problem_solving",
+                    "references": [{"title": "Propositional Logic", "url": "internal://logic/propositional"}],
+                    "reasoning_steps": [
+                        "Detected conditional implication pattern.",
+                        "Matched premise P with implication P -> Q.",
+                        "Requested conclusion does not match Q.",
+                    ],
+                    "direct_reasoning": True,
+                }
+
+        m2 = re.match(r"^if (.+?), (.+?)\. (.+?)\. does(?: it)? follow that (.+)$", q)
+        if m2:
+            antecedent = norm_clause(m2.group(1))
+            consequent = norm_clause(m2.group(2))
+            fact = norm_clause(m2.group(3))
+            conclusion = norm_clause(m2.group(4))
+            if antecedent and consequent and fact and conclusion:
+                fact_matches = self._path_consistency(fact, antecedent) >= 0.45
+                concl_matches = self._path_consistency(conclusion, consequent) >= 0.45
+                if fact_matches and concl_matches:
+                    return {
+                        "answer": "Yes. The conclusion follows by modus ponens from the given premises.",
+                        "confidence": 0.9,
+                        "intent": "problem_solving",
+                        "references": [{"title": "Propositional Logic", "url": "internal://logic/propositional"}],
+                        "reasoning_steps": [
+                            "Parsed implication premise and factual premise.",
+                            "Matched fact to implication antecedent.",
+                            "Inferred consequent as valid conclusion.",
+                        ],
+                        "direct_reasoning": True,
+                    }
+
+        m2b = re.match(r"^if (.+?) and (.+?) and (.+?), does it(?: logically)? follow that (.+)$", q)
+        if m2b:
+            p1 = norm_clause(m2b.group(1))
+            p2 = norm_clause(m2b.group(2))
+            p3 = norm_clause(m2b.group(3))
+            conc = norm_clause(m2b.group(4))
+
+            def _isa(clause: str) -> tuple[str, str] | None:
+                mm = re.match(r"^([a-z ]+?) are ([a-z ]+)$", clause)
+                if not mm:
+                    return None
+                return mm.group(1).strip(), mm.group(2).strip()
+
+            def _exists(clause: str) -> str | None:
+                mm = re.match(r"^([a-z ]+?) exist$", clause)
+                if not mm:
+                    return None
+                return mm.group(1).strip()
+
+            r1 = _isa(p1)
+            r2 = _isa(p2)
+            rc = _isa(conc)
+            ex = _exists(p3)
+            if r1 and r2 and rc and ex:
+                x1, y1 = r1
+                x2, y2 = r2
+                xc, yc = rc
+                chain_ok = self._path_consistency(y1, x2) >= 0.7
+                seed_ok = self._path_consistency(ex, x1) >= 0.7
+                concl_ok = self._path_consistency(xc, x1) >= 0.7 and self._path_consistency(yc, y2) >= 0.7
+                if chain_ok and seed_ok and concl_ok:
+                    return {
+                        "answer": "Yes. By transitive class reasoning, if X are Y and Y are Z, then X are Z.",
+                        "confidence": 0.9,
+                        "intent": "problem_solving",
+                        "references": [{"title": "Predicate Logic Rule", "url": "internal://logic/quantifiers"}],
+                        "reasoning_steps": [
+                            "Parsed class relations X -> Y and Y -> Z.",
+                            "Detected existence/seed fact for X.",
+                            "Applied transitive entailment to infer X -> Z.",
+                        ],
+                        "direct_reasoning": True,
+                    }
+                if chain_ok and seed_ok and not concl_ok:
+                    return {
+                        "answer": "No. The transitive conclusion should be X are Z, but the requested conclusion differs.",
+                        "confidence": 0.86,
+                        "intent": "problem_solving",
+                        "references": [{"title": "Predicate Logic Rule", "url": "internal://logic/quantifiers"}],
+                        "reasoning_steps": [
+                            "Parsed class relations X -> Y and Y -> Z.",
+                            "Built transitive implication X -> Z.",
+                            "Compared with requested conclusion and found mismatch.",
+                        ],
+                        "direct_reasoning": True,
+                    }
+
+        m3 = re.match(
+            r"^if (.+?) then (.+?) and if (.+?) then (.+?) and (.+?), does it(?: logically)? follow that (.+)$",
+            q,
+        )
+        if m3:
+            p = norm_clause(m3.group(1))
+            q1 = norm_clause(m3.group(2))
+            q2 = norm_clause(m3.group(3))
+            r = norm_clause(m3.group(4))
+            fact = norm_clause(m3.group(5))
+            conclusion = norm_clause(m3.group(6))
+            chain_ok = self._path_consistency(q1, q2) >= 0.5
+            fact_ok = self._path_consistency(fact, p) >= 0.5
+            concl_ok = self._path_consistency(conclusion, r) >= 0.5
+            if chain_ok and fact_ok and concl_ok:
+                return {
+                    "answer": "Yes. By chaining implications (hypothetical syllogism) and applying modus ponens, the conclusion follows.",
+                    "confidence": 0.92,
+                    "intent": "problem_solving",
+                    "references": [{"title": "Propositional Logic", "url": "internal://logic/propositional"}],
+                    "reasoning_steps": [
+                        "Detected implication chain P -> Q and Q -> R.",
+                        "Combined chain to infer P -> R.",
+                        "Used fact P and applied modus ponens to conclude R.",
+                    ],
+                    "direct_reasoning": True,
+                }
+            if chain_ok and fact_ok and not concl_ok:
+                return {
+                    "answer": "No. From the premises, the justified conclusion is R from the implication chain, not the requested statement.",
+                    "confidence": 0.88,
+                    "intent": "problem_solving",
+                    "references": [{"title": "Propositional Logic", "url": "internal://logic/propositional"}],
+                    "reasoning_steps": [
+                        "Detected implication chain P -> Q and Q -> R.",
+                        "Used fact P to infer R.",
+                        "Requested conclusion does not match inferred R.",
+                    ],
+                    "direct_reasoning": True,
+                }
+
+        if "does it logically follow that" in q or "does it follow that" in q:
+            premise_part = q
+            conclusion = ""
+            if "does it logically follow that" in q:
+                premise_part, conclusion = q.split("does it logically follow that", 1)
+            elif "does it follow that" in q:
+                premise_part, conclusion = q.split("does it follow that", 1)
+            conclusion = norm_clause(conclusion)
+            raw_premises = [norm_clause(p) for p in re.split(r"\s+and\s+", premise_part) if norm_clause(p)]
+            premise_set = set(raw_premises)
+            contradiction_found = False
+            for p in list(premise_set):
+                if negate_clause(p) in premise_set:
+                    contradiction_found = True
+                    break
+            if contradiction_found:
+                return {
+                    "answer": (
+                        "The premises are inconsistent (contain both a statement and its negation). "
+                        "In classical logic this makes any conclusion derivable, so the argument is not informative."
+                    ),
+                    "confidence": 0.87,
+                    "intent": "problem_solving",
+                    "references": [{"title": "Propositional Logic", "url": "internal://logic/propositional"}],
+                    "reasoning_steps": [
+                        "Parsed premise set and normalized clauses.",
+                        "Detected explicit contradiction P and not P.",
+                        "Marked argument as inconsistent/non-informative.",
+                    ],
+                    "direct_reasoning": True,
+                }
+        return None
+
     def _deterministic_reasoning_answer(self, query: str) -> dict[str, Any] | None:
+        disambiguation = self._entity_disambiguation_answer(query)
+        if disambiguation:
+            return disambiguation
+        propositional = self._propositional_logic_answer(query)
+        if propositional:
+            return propositional
         logic = self._logical_syllogism_answer(query)
         if logic:
             return logic
@@ -1332,6 +1662,7 @@ class AICore:
     @staticmethod
     def _semantic_normalize(query: str) -> str:
         q = re.sub(r"\s+", " ", query.strip().lower())
+        q = re.sub(r"^(?:fact[\s-]?check|verify|double[\s-]?check)\s+", "", q)
         q = re.sub(r"\bwhat\s+it\s+is\b", "what is", q)
         q = re.sub(r"\bwat is\b", "what is", q)
         q = re.sub(r"\bwht is\b", "what is", q)
@@ -1418,6 +1749,317 @@ class AICore:
             delta += 0.03
         return delta
 
+    @staticmethod
+    def _is_strict_fact_check_request(text: str) -> bool:
+        q = re.sub(r"\s+", " ", str(text or "").lower()).strip()
+        markers = [
+            "fact check",
+            "fact-check",
+            "verify",
+            "double check",
+            "double-check",
+            "are you sure",
+            "cross-check",
+            "check sources",
+            "source check",
+        ]
+        return any(m in q for m in markers)
+
+    def _consensus_vote_answer(
+        self,
+        *,
+        query: str,
+        topic: str,
+        intent: str,
+        primary_answer: str,
+        primary_refs: list[dict[str, str]],
+        primary_conf: float,
+        internal_candidate: dict[str, Any] | None,
+        should_search_web: bool,
+        planned_variants: int,
+        strict_fact_check: bool,
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
+        def add_candidate(bucket: list[dict[str, Any]], name: str, answer: str, refs: list[dict[str, str]], conf: float) -> None:
+            clean = self._strip_conf(str(answer or "")).strip()
+            if not clean:
+                return
+            for existing in bucket:
+                if self._path_consistency(str(existing.get("answer", "")), clean) >= 0.97:
+                    return
+            bucket.append(
+                {
+                    "name": name,
+                    "answer": clean,
+                    "references": list(refs or []),
+                    "confidence": self._clamp(float(conf), 0.05, 0.99),
+                }
+            )
+
+        candidates: list[dict[str, Any]] = []
+        add_candidate(candidates, "primary", primary_answer, primary_refs, primary_conf)
+
+        if internal_candidate and isinstance(internal_candidate, dict):
+            add_candidate(
+                candidates,
+                "internal_candidate",
+                str(internal_candidate.get("answer", "")).strip(),
+                list(internal_candidate.get("references", [])),
+                float(internal_candidate.get("confidence", 0.7)),
+            )
+
+        learned = self.memory.get_rule(topic, user_id=user_id)
+        if learned and isinstance(learned.get("current"), dict):
+            cur = learned["current"]
+            if bool(cur.get("verified", True)):
+                add_candidate(
+                    candidates,
+                    "learned_rule",
+                    str(cur.get("answer", "")).strip(),
+                    [{"title": "Learned Memory Rule", "url": f"memory://rules/{topic.replace(' ', '_')}"}],
+                    float(cur.get("confidence", 0.65)),
+                )
+
+        if should_search_web:
+            web_result = self._knowledge_multi_path(
+                query,
+                topic,
+                user_id=user_id,
+                max_variants=max(2, int(planned_variants)),
+            )
+            add_candidate(
+                candidates,
+                "web_vote",
+                str(web_result.get("answer", "")).strip(),
+                list(web_result.get("references", [])),
+                float(web_result.get("confidence", 0.55)),
+            )
+
+        if len(candidates) <= 1:
+            only = candidates[0] if candidates else {"answer": primary_answer, "references": primary_refs, "confidence": primary_conf, "name": "primary"}
+            return {
+                "answer": str(only.get("answer", "")).strip(),
+                "references": list(only.get("references", [])),
+                "confidence": float(only.get("confidence", primary_conf)),
+                "relevance": self._query_answer_relevance(query, str(only.get("answer", ""))),
+                "focus_overlap": self._query_answer_relevance(query, str(only.get("answer", ""))),
+                "notes": ["Consensus vote skipped: only one candidate available."],
+            }
+
+        for cand in candidates:
+            answer = str(cand.get("answer", ""))
+            refs = list(cand.get("references", []))
+            relevance = self._query_answer_relevance(query, answer)
+            focus_tokens = self._focus_query_tokens(query)
+            answer_tokens = self._token_set(answer)
+            focus_overlap = (len(focus_tokens & answer_tokens) / max(len(focus_tokens), 1)) if focus_tokens else relevance
+            trust = self._source_reliability(refs)
+            peers = [p for p in candidates if p is not cand]
+            consensus = 0.0
+            if peers:
+                consensus = sum(self._path_consistency(answer, str(p.get("answer", ""))) for p in peers) / len(peers)
+
+            score = (
+                (self._clamp(float(cand.get("confidence", 0.5)), 0.0, 1.0) * 0.42)
+                + (relevance * 0.23)
+                + (focus_overlap * 0.12)
+                + (trust * 0.12)
+                + (consensus * 0.11)
+                + self._quality_adjustment(answer, refs)
+            )
+            if strict_fact_check and trust < 0.65:
+                score -= 0.08
+            if strict_fact_check and "could not find a high-confidence summary" in answer.lower():
+                score -= 0.2
+
+            cand["relevance"] = relevance
+            cand["focus_overlap"] = focus_overlap
+            cand["trust"] = trust
+            cand["consensus"] = consensus
+            cand["score"] = self._clamp(score, 0.01, 0.99)
+
+        candidates.sort(key=lambda c: float(c.get("score", 0.0)), reverse=True)
+        best = candidates[0]
+        supporters = [c for c in candidates[1:] if self._path_consistency(str(best.get("answer", "")), str(c.get("answer", ""))) >= 0.45]
+        merged_refs = self._merge_references(list(best.get("references", [])), *[list(s.get("references", [])) for s in supporters[:2]])
+        out_conf = self._clamp(float(best.get("score", 0.5)) + min(0.06, 0.02 * len(supporters)), 0.05, 0.95)
+        notes = [
+            f"Consensus voting compared {len(candidates)} candidates.",
+            f"Selected candidate: {best.get('name', 'primary')}.",
+        ]
+        if supporters:
+            notes.append(f"Supporting candidates: {len(supporters)}.")
+        if strict_fact_check:
+            trust = self._source_reliability(merged_refs)
+            if len(supporters) < 1 or trust < 0.66:
+                out_conf = min(out_conf, 0.74)
+                notes.append("Strict fact-check mode lowered confidence due weak consensus/trust.")
+            else:
+                notes.append("Strict fact-check mode passed consensus/trust checks.")
+
+        return {
+            "answer": str(best.get("answer", "")).strip(),
+            "references": merged_refs,
+            "confidence": out_conf,
+            "relevance": float(best.get("relevance", 0.0)),
+            "focus_overlap": float(best.get("focus_overlap", 0.0)),
+            "notes": notes,
+        }
+
+    def _self_critique_and_repair(
+        self,
+        *,
+        query: str,
+        topic: str,
+        intent: str,
+        answer: str,
+        references: list[dict[str, str]],
+        confidence: float,
+        internal_candidate: dict[str, Any] | None,
+        should_search_web: bool,
+        planned_variants: int,
+        strict_fact_check: bool,
+        user_id: str | None = None,
+    ) -> tuple[str, list[dict[str, str]], float, float, float, list[str]]:
+        notes: list[str] = []
+        if intent not in {"knowledge", "problem_solving"}:
+            return answer, references, confidence, self._query_answer_relevance(query, answer), self._query_answer_relevance(query, answer), notes
+
+        clean = str(answer or "").strip()
+        if not clean:
+            return answer, references, confidence, 0.0, 0.0, notes
+        if clean.lower().startswith("step-by-step reasoning:"):
+            return answer, references, confidence, self._query_answer_relevance(query, clean), self._query_answer_relevance(query, clean), notes
+
+        trigger = strict_fact_check or float(confidence) < 0.72
+        if not trigger:
+            rel = self._query_answer_relevance(query, clean)
+            return answer, references, confidence, rel, rel, notes
+
+        audit = self._consensus_vote_answer(
+            query=query,
+            topic=topic,
+            intent=intent,
+            primary_answer=clean,
+            primary_refs=references,
+            primary_conf=confidence,
+            internal_candidate=internal_candidate,
+            should_search_web=should_search_web,
+            planned_variants=max(3, int(planned_variants)),
+            strict_fact_check=True,
+            user_id=user_id,
+        )
+        audit_answer = str(audit.get("answer", "")).strip()
+        if not audit_answer:
+            rel = self._query_answer_relevance(query, clean)
+            notes.append("Self-critique produced no alternative candidate.")
+            return answer, references, confidence, rel, rel, notes
+
+        base_consistency = self._path_consistency(clean, audit_answer)
+        audit_conf = float(audit.get("confidence", confidence))
+        audit_rel = float(audit.get("relevance", self._query_answer_relevance(query, audit_answer)))
+        audit_focus = float(audit.get("focus_overlap", audit_rel))
+        base_rel = self._query_answer_relevance(query, clean)
+
+        adopt = False
+        if strict_fact_check and audit_conf >= confidence and audit_rel >= base_rel:
+            adopt = True
+        elif audit_conf >= confidence + 0.05 and audit_rel >= base_rel:
+            adopt = True
+        elif base_consistency >= 0.5 and audit_conf > confidence:
+            adopt = True
+
+        if adopt:
+            merged_refs = self._merge_references(references, list(audit.get("references", [])))
+            notes.append("Self-critique second pass updated answer candidate.")
+            notes.extend([str(n) for n in list(audit.get("notes", []))[:3]])
+            return audit_answer, merged_refs, self._clamp(audit_conf), audit_rel, audit_focus, notes
+
+        merged_refs = self._merge_references(references, list(audit.get("references", [])))
+        improved_conf = confidence
+        if base_consistency >= 0.52 and audit_conf > confidence:
+            improved_conf = self._clamp((confidence * 0.8) + (audit_conf * 0.2))
+            notes.append("Self-critique increased confidence due consistent second-pass evidence.")
+        else:
+            notes.append("Self-critique retained original answer after conflict check.")
+        return clean, merged_refs, improved_conf, base_rel, base_rel, notes
+
+    def _multi_hop_candidate(
+        self,
+        query: str,
+        topic: str,
+        intent: str,
+        *,
+        should_search_web: bool,
+        planned_variants: int,
+        user_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        if intent not in {"knowledge", "problem_solving"}:
+            return None
+        q = re.sub(r"\s+", " ", str(query or "").strip().lower())
+
+        m = re.match(r"^(?:compare|difference between)\s+(.+?)\s+and\s+(.+)$", q)
+        if not m:
+            return None
+        left = m.group(1).strip(" .?!")
+        right = m.group(2).strip(" .?!")
+        if not left or not right or left == right:
+            return None
+
+        def _single_subject_answer(subject: str) -> dict[str, Any]:
+            normalized_subject = self._semantic_normalize(f"what is {subject}")
+            internal = self._internal_knowledge_lookup(normalized_subject, self._topic_from_query(normalized_subject))
+            if internal and isinstance(internal, dict):
+                return {
+                    "answer": str(internal.get("answer", "")).strip(),
+                    "references": list(internal.get("references", [])),
+                    "confidence": float(internal.get("confidence", 0.8)),
+                }
+            if should_search_web:
+                result = self._knowledge_multi_path(
+                    normalized_subject,
+                    self._topic_from_query(normalized_subject),
+                    user_id=user_id,
+                    max_variants=max(1, min(2, planned_variants)),
+                )
+                return {
+                    "answer": str(result.get("answer", "")).strip(),
+                    "references": list(result.get("references", [])),
+                    "confidence": float(result.get("confidence", 0.6)),
+                }
+            return {"answer": "", "references": [], "confidence": 0.4}
+
+        left_ans = _single_subject_answer(left)
+        right_ans = _single_subject_answer(right)
+        if not left_ans.get("answer") or not right_ans.get("answer"):
+            return None
+
+        answer = (
+            f"Comparison summary:\n"
+            f"- {left.title()}: {str(left_ans.get('answer', '')).strip()}\n"
+            f"- {right.title()}: {str(right_ans.get('answer', '')).strip()}\n"
+            "Key difference: they are distinct concepts with different roles and contexts."
+        )
+        refs = self._merge_references(
+            list(left_ans.get("references", [])),
+            list(right_ans.get("references", [])),
+            [{"title": "Multi-Hop Reasoning", "url": "internal://multi-hop"}],
+        )
+        conf = self._clamp((float(left_ans.get("confidence", 0.6)) + float(right_ans.get("confidence", 0.6))) / 2.0, 0.45, 0.9)
+        return {
+            "answer": answer,
+            "references": refs,
+            "confidence": conf,
+            "reasoning_steps": [
+                "Detected comparative query requiring multiple sub-answers.",
+                f"Resolved subquery for '{left}'.",
+                f"Resolved subquery for '{right}'.",
+                "Merged sub-answers into comparative summary.",
+            ],
+            "direct_reasoning": True,
+            "multi_hop": True,
+        }
+
     def _score_confidence(
         self,
         topic: str,
@@ -1449,7 +2091,13 @@ class AICore:
             "understanding": round(understand, 3),
         }
 
-    def _knowledge_multi_path(self, query: str, topic: str, user_id: str | None = None) -> dict[str, Any]:
+    def _knowledge_multi_path(
+        self,
+        query: str,
+        topic: str,
+        user_id: str | None = None,
+        max_variants: int | None = None,
+    ) -> dict[str, Any]:
         paths: list[dict[str, Any]] = []
         notes: list[str] = ["Generate 3 independent reasoning paths when possible."]
         focus_tokens = self._focus_query_tokens(query)
@@ -1483,7 +2131,10 @@ class AICore:
                     }
                 )
 
-        variant_limit = self.accuracy.search_variants_limit(query, must_search=True)
+        if max_variants is None:
+            variant_limit = self.accuracy.search_variants_limit(query, must_search=True)
+        else:
+            variant_limit = max(1, int(max_variants))
         for idx, variant in enumerate(self._query_variants(query, topic)[: max(1, variant_limit)]):
             result = self.search.search(variant)
             paths.append(
@@ -2575,8 +3226,51 @@ class AICore:
 
         intent = self._intent(normalized)
         deterministic_candidate = self._deterministic_reasoning_answer(normalized)
-        if deterministic_candidate and str(deterministic_candidate.get("intent", "")) == "problem_solving":
-            intent = "problem_solving"
+        if deterministic_candidate:
+            det_intent = str(deterministic_candidate.get("intent", "")).strip().lower()
+            if det_intent in {"problem_solving", "clarification"}:
+                intent = det_intent
+        if deterministic_candidate and intent == "clarification":
+            topic = self._topic_from_query(normalized)
+            self._maybe_update_session_title(session_id, topic, normalized, intent, user_id=user_id)
+            conf = float(deterministic_candidate.get("confidence", 0.88))
+            refs = list(deterministic_candidate.get("references", []))
+            base_answer = str(deterministic_candidate.get("answer", "")).strip()
+            answer = self._attach_conf(base_answer, conf)
+            reflection_steps = list(deterministic_candidate.get("reasoning_steps", []))
+            if not reflection_steps:
+                reflection_steps = ["Deterministic disambiguation triggered.", "Requested clarification before answering."]
+            self.memory.record_experience(session_id, raw, answer, "clarification", conf, refs, user_id=user_id)
+            self.memory.append_message(session_id, "assistant", answer, user_id=user_id)
+            self._log_decision(
+                session_id,
+                "clarification",
+                topic,
+                conf,
+                understanding_conf,
+                refs,
+                reflection_steps,
+                {
+                    "base_model": round(conf, 3),
+                    "internal_reasoning": 0.84,
+                    "source_reliability": round(self._source_reliability(refs), 3),
+                    "consistency": 0.9,
+                    "history_signal": 0.72,
+                    "understanding": round(understanding_conf, 3),
+                },
+                user_id=user_id,
+            )
+            return {
+                "session_id": session_id,
+                "answer": answer,
+                "intent": "clarification",
+                "references": refs,
+                "fuzzy_corrections": corrections,
+                "confidence": int(round(conf * 100)),
+                "reflection_steps": reflection_steps,
+                "topic": topic,
+                "related_concepts": self.memory.graph_neighbors(topic, limit=4, user_id=user_id),
+            }
         fictional_candidate: dict[str, Any] | None = None
         if intent in {"knowledge", "problem_solving"} and not deterministic_candidate and self._is_likely_fictional_query(normalized):
             ans, refs, conf, steps = self._fictional_query_response(normalized)
@@ -2594,14 +3288,48 @@ class AICore:
         self.memory.update_topic_stats(topic, "questions", user_id=user_id)
         knowledge_relevance = 1.0
         knowledge_focus_overlap = 1.0
+        retrieval_candidate = (
+            self._memory_retrieval_candidate(normalized, intent, topic=topic, user_id=user_id)
+            if intent in {"knowledge", "problem_solving"} and not deterministic_candidate and not fictional_candidate
+            else None
+        )
+        multi_hop_candidate = (
+            self._multi_hop_candidate(
+                normalized,
+                topic,
+                intent,
+                should_search_web=True,
+                planned_variants=2,
+                user_id=user_id,
+            )
+            if intent in {"knowledge", "problem_solving"} and not deterministic_candidate and not fictional_candidate and not retrieval_candidate
+            else None
+        )
         internal_candidate = (
             deterministic_candidate
             if deterministic_candidate and intent in {"knowledge", "problem_solving"}
             else (
                 fictional_candidate
                 if fictional_candidate and intent in {"knowledge", "problem_solving"}
-                else (self._internal_knowledge_lookup(normalized, topic) if intent in {"knowledge", "problem_solving"} else None)
+                else (
+                    retrieval_candidate
+                    if retrieval_candidate and intent in {"knowledge", "problem_solving"}
+                    else (
+                        multi_hop_candidate
+                        if multi_hop_candidate and intent in {"knowledge", "problem_solving"}
+                        else (self._internal_knowledge_lookup(normalized, topic) if intent in {"knowledge", "problem_solving"} else None)
+                    )
+                )
             )
+        )
+        topic_stats = self.memory.get_topic_stats(topic, user_id=user_id)
+        plan = self.planner.analyze(
+            query=normalized,
+            intent=intent,
+            understanding_conf=understanding_conf,
+            has_internal_candidate=bool(internal_candidate),
+            topic=topic,
+            topic_stats=topic_stats,
         )
         should_search_web = self._should_search_web(
             query=normalized,
@@ -2611,6 +3339,60 @@ class AICore:
             understanding_conf=understanding_conf,
             user_id=user_id,
         )
+        should_search_web = bool(should_search_web and bool(plan.get("allow_web", True)))
+        planned_variants = max(1, int(plan.get("search_variants", 2)))
+        strict_fact_check = self._is_strict_fact_check_request(raw) or self._is_strict_fact_check_request(normalized)
+        if strict_fact_check and intent in {"knowledge", "problem_solving"}:
+            should_search_web = True
+            planned_variants = max(planned_variants, 3)
+
+        if (
+            intent in {"knowledge", "problem_solving"}
+            and not internal_candidate
+            and bool(plan.get("request_clarification", False))
+        ):
+            conf = 0.57
+            answer = self._attach_conf(
+                f"I need more context to answer '{normalized}' accurately. Please clarify what exactly you want.",
+                conf,
+            )
+            refs = [{"title": "Query Planner Clarification", "url": "internal://query-planner"}]
+            reflection_steps = [
+                "Query planner marked input as too vague for reliable retrieval.",
+                f"Planned route: {plan.get('route', 'clarify')}.",
+                "Requested clarification before web/internal reasoning.",
+            ]
+            self.memory.record_experience(session_id, raw, answer, "clarification", conf, refs, user_id=user_id)
+            self.memory.append_message(session_id, "assistant", answer, user_id=user_id)
+            self._log_decision(
+                session_id,
+                "clarification",
+                topic,
+                conf,
+                understanding_conf,
+                refs,
+                reflection_steps,
+                {
+                    "base_model": round(conf, 3),
+                    "internal_reasoning": 0.66,
+                    "source_reliability": 0.6,
+                    "consistency": 0.77,
+                    "history_signal": 0.64,
+                    "understanding": round(understanding_conf, 3),
+                },
+                user_id=user_id,
+            )
+            return {
+                "session_id": session_id,
+                "answer": answer,
+                "intent": "clarification",
+                "references": refs,
+                "fuzzy_corrections": corrections,
+                "confidence": int(round(conf * 100)),
+                "reflection_steps": reflection_steps,
+                "topic": topic,
+                "related_concepts": self.memory.graph_neighbors(topic, limit=4, user_id=user_id),
+            }
 
         if intent in {"knowledge", "problem_solving"} and not internal_candidate and self._is_overly_ambiguous_query(normalized):
             conf = 0.58
@@ -2695,10 +3477,21 @@ class AICore:
                     knowledge_relevance = self._query_answer_relevance(normalized, base_answer)
                     knowledge_focus_overlap = knowledge_relevance
                     path_steps = list(internal.get("reasoning_steps", [])) if isinstance(internal.get("reasoning_steps"), list) else []
-                    path_steps += ["Used curated internal knowledge for core concept.", "Structured reasoning steps generated."]
+                    if bool(internal.get("from_memory_retrieval", False)):
+                        path_steps += [
+                            "Used similar prior solved interaction from memory retrieval.",
+                            "Structured reasoning steps generated.",
+                        ]
+                    else:
+                        path_steps += ["Used curated internal knowledge for core concept.", "Structured reasoning steps generated."]
                 else:
                     if should_search_web:
-                        result = self._knowledge_multi_path(normalized, topic, user_id=user_id)
+                        result = self._knowledge_multi_path(
+                            normalized,
+                            topic,
+                            user_id=user_id,
+                            max_variants=planned_variants,
+                        )
                         raw_candidate = str(result.get("answer", "")).strip()
                         rejection_flag = any(
                             "acceptance policy" in str(note).lower() for note in list(result.get("notes", []))
@@ -2742,10 +3535,18 @@ class AICore:
                     knowledge_relevance = self._query_answer_relevance(normalized, base_answer)
                     knowledge_focus_overlap = knowledge_relevance
                     path_steps = list(internal.get("reasoning_steps", [])) if isinstance(internal.get("reasoning_steps"), list) else []
-                    path_steps += ["Used curated internal knowledge for core concept."]
+                    if bool(internal.get("from_memory_retrieval", False)):
+                        path_steps += ["Used similar prior solved interaction from memory retrieval."]
+                    else:
+                        path_steps += ["Used curated internal knowledge for core concept."]
                 else:
                     if should_search_web:
-                        result = self._knowledge_multi_path(normalized, topic, user_id=user_id)
+                        result = self._knowledge_multi_path(
+                            normalized,
+                            topic,
+                            user_id=user_id,
+                            max_variants=planned_variants,
+                        )
                         raw_candidate = str(result.get("answer", "")).strip()
                         rejection_flag = any(
                             "acceptance policy" in str(note).lower() for note in list(result.get("notes", []))
@@ -2781,7 +3582,78 @@ class AICore:
                         knowledge_focus_overlap = 0.0
                         path_steps = ["Search policy blocked web lookup due low-value query pattern.", "Requested clarification."]
 
+        if (
+            intent in {"knowledge", "problem_solving"}
+            and str(base_answer or "").strip()
+            and "please clarify" not in str(base_answer).lower()
+            and not (intent == "problem_solving" and str(base_answer).lower().startswith("step-by-step reasoning:"))
+        ):
+            voted = self._consensus_vote_answer(
+                query=normalized,
+                topic=topic,
+                intent=intent,
+                primary_answer=base_answer,
+                primary_refs=refs,
+                primary_conf=base_conf,
+                internal_candidate=internal_candidate if isinstance(internal_candidate, dict) else None,
+                should_search_web=should_search_web,
+                planned_variants=planned_variants,
+                strict_fact_check=strict_fact_check,
+                user_id=user_id,
+            )
+            voted_answer = str(voted.get("answer", "")).strip()
+            if voted_answer:
+                if strict_fact_check and isinstance(internal_candidate, dict):
+                    internal_answer = self._strip_conf(str(internal_candidate.get("answer", ""))).strip()
+                    internal_conf = float(internal_candidate.get("confidence", 0.0))
+                    if internal_answer and internal_conf >= 0.84:
+                        agreement = self._path_consistency(voted_answer, internal_answer)
+                        if agreement < 0.28:
+                            voted_answer = internal_answer
+                            voted["references"] = self._merge_references(
+                                list(internal_candidate.get("references", [])),
+                                list(voted.get("references", [])),
+                            )
+                            voted["confidence"] = min(0.86, max(float(voted.get("confidence", 0.7)), internal_conf))
+                            notes = list(voted.get("notes", []))
+                            notes.append("Strict fact-check fallback: kept strong internal candidate due low agreement with external vote.")
+                            voted["notes"] = notes
+                base_answer = voted_answer
+                refs = self._merge_references(refs, list(voted.get("references", [])))
+                base_conf = self._clamp(max(base_conf, float(voted.get("confidence", base_conf))))
+                knowledge_relevance = float(voted.get("relevance", knowledge_relevance))
+                knowledge_focus_overlap = float(voted.get("focus_overlap", knowledge_focus_overlap))
+                path_steps.extend([str(n) for n in list(voted.get("notes", []))[:4]])
+
+        if intent in {"knowledge", "problem_solving"} and str(base_answer or "").strip():
+            (
+                base_answer,
+                refs,
+                base_conf,
+                knowledge_relevance,
+                knowledge_focus_overlap,
+                critique_notes,
+            ) = self._self_critique_and_repair(
+                query=normalized,
+                topic=topic,
+                intent=intent,
+                answer=base_answer,
+                references=refs,
+                confidence=base_conf,
+                internal_candidate=internal_candidate if isinstance(internal_candidate, dict) else None,
+                should_search_web=should_search_web,
+                planned_variants=planned_variants,
+                strict_fact_check=strict_fact_check,
+                user_id=user_id,
+            )
+            path_steps.extend(critique_notes[:4])
+
         if intent in {"knowledge", "problem_solving"}:
+            path_steps.append(
+                f"Query planner route: {plan.get('route', 'default')} | web_allowed={str(bool(plan.get('allow_web', True))).lower()}."
+            )
+            if strict_fact_check:
+                path_steps.append("Strict fact-check mode enabled by user phrasing.")
             token_count = len(self._token_set(normalized))
             relevance_floor = 0.16 if token_count <= 4 else 0.12
             focus_tokens = self._focus_query_tokens(normalized)

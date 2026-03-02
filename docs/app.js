@@ -1,9 +1,14 @@
 function resolveApiBase() {
+  const defaultCloudApi = "https://asseri--asserkdev.replit.app";
+  const isGitHubPages =
+    window.location.hostname === "asserkdev.github.io" &&
+    window.location.pathname.toLowerCase().includes("/asseri-master");
   const params = new URLSearchParams(window.location.search);
   const fromQuery = (params.get("api") || "").trim();
   const fromStorage = (localStorage.getItem("asseri_api_base") || "").trim();
   const fromWindow = (window.APP_API_BASE || "").trim();
-  const chosen = fromQuery || fromStorage || fromWindow;
+  const fromDefault = isGitHubPages ? defaultCloudApi : "";
+  const chosen = fromQuery || fromWindow || fromDefault || fromStorage;
   if (chosen) {
     localStorage.setItem("asseri_api_base", chosen);
   }

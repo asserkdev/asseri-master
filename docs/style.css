@@ -124,6 +124,32 @@ body {
   color: var(--muted);
 }
 
+.panel a {
+  color: #9edbff;
+  text-decoration: none;
+}
+
+.panel a:hover {
+  text-decoration: underline;
+}
+
+.connection-panel p {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.connection-panel p + p {
+  margin-top: 6px;
+}
+
+.connection-tip code {
+  font-family: "Space Grotesk", "Manrope", sans-serif;
+  font-size: 0.72rem;
+  color: #d4e9ff;
+}
+
 .auth-state {
   margin: 0 0 8px;
   color: var(--muted);

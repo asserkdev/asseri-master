@@ -584,6 +584,114 @@ class MemoryStore:
             table = state["mistake_patterns"] if mistake else state["question_patterns"]
             return int(table.get(pattern_key, 0))
 
+    @staticmethod
+    def _experience_tokens(text: str) -> set[str]:
+        stop = {
+            "the",
+            "and",
+            "for",
+            "with",
+            "that",
+            "this",
+            "what",
+            "who",
+            "where",
+            "when",
+            "why",
+            "how",
+            "is",
+            "are",
+            "was",
+            "were",
+            "tell",
+            "about",
+            "explain",
+        }
+        out: set[str] = set()
+        for token in re.findall(r"[a-z0-9]+", str(text or "").lower()):
+            if len(token) <= 1 or token in stop:
+                continue
+            if token.endswith("ies") and len(token) > 4:
+                token = f"{token[:-3]}y"
+            elif token.endswith("s") and len(token) > 3:
+                token = token[:-1]
+            out.add(token)
+        return out
+
+    @classmethod
+    def _experience_similarity(cls, a: str, b: str) -> float:
+        ta = cls._experience_tokens(a)
+        tb = cls._experience_tokens(b)
+        if not ta or not tb:
+            return 0.0
+        return len(ta & tb) / max(len(ta | tb), 1)
+
+    def find_similar_experiences(
+        self,
+        query: str,
+        *,
+        user_id: str | None = None,
+        limit: int = 3,
+        min_score: float = 0.45,
+    ) -> list[dict[str, Any]]:
+        with self.lock:
+            state = self._state_no_lock(user_id)
+            experiences = state.get("experiences", [])
+            if not isinstance(experiences, list) or not experiences:
+                return []
+            scored: list[dict[str, Any]] = []
+            query_low = str(query or "").strip().lower()
+            for row in reversed(experiences[-2000:]):
+                if not isinstance(row, dict):
+                    continue
+                user_text = str(row.get("user", "")).strip()
+                assistant_text = str(row.get("assistant", "")).strip()
+                if not user_text or not assistant_text:
+                    continue
+                score = self._experience_similarity(query_low, user_text.lower())
+                if query_low and query_low in user_text.lower():
+                    score = max(score, 0.9)
+                if score < min_score:
+                    continue
+                scored.append(
+                    {
+                        "score": round(score, 4),
+                        "user": user_text,
+                        "assistant": assistant_text,
+                        "intent": str(row.get("intent", "")),
+                        "confidence": float(row.get("confidence", 0.0)),
+                        "timestamp": str(row.get("timestamp", "")),
+                        "references": list(row.get("references", [])) if isinstance(row.get("references"), list) else [],
+                    }
+                )
+                if len(scored) >= max(1, min(limit * 4, 20)):
+                    break
+            scored.sort(key=lambda x: (float(x.get("score", 0.0)), float(x.get("confidence", 0.0))), reverse=True)
+            return scored[: max(1, limit)]
+
+    def latest_topic_correction(self, topic: str, user_id: str | None = None) -> dict[str, Any] | None:
+        normalized_topic = self.topic_key(topic or "")
+        if not normalized_topic or normalized_topic == "general":
+            return None
+        with self.lock:
+            state = self._state_no_lock(user_id)
+            rows = state.get("corrections", [])
+            if not isinstance(rows, list):
+                return None
+            for row in reversed(rows):
+                if not isinstance(row, dict):
+                    continue
+                row_topic = self.topic_key(str(row.get("topic", "")))
+                if row_topic != normalized_topic:
+                    continue
+                return {
+                    "timestamp": str(row.get("timestamp", "")),
+                    "topic": row_topic,
+                    "failed_answer": str(row.get("failed_answer", "")),
+                    "corrected_answer": str(row.get("corrected_answer", "")),
+                }
+        return None
+
     def record_experience(
         self,
         session_id: str,

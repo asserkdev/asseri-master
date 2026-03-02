@@ -117,13 +117,6 @@ class MathEngine:
             "expand",
             "factor",
             "limit",
-            "sum of",
-            "difference between",
-            "product of",
-            "quotient of",
-            "increase",
-            "decrease",
-            "percent",
             "sqrt",
             "root",
             "matrix multiply",
@@ -131,6 +124,12 @@ class MathEngine:
             "matrix product",
         ]
         if any(t in q for t in triggers):
+            return True
+        if re.search(r"(sum of|difference between|product of|quotient of)\s+-?\d", q):
+            return True
+        if re.search(r"(increase|decrease)\s+-?\d+(?:\.\d+)?\s+by\s+-?\d+(?:\.\d+)?\s*percent", q):
+            return True
+        if re.search(r"-?\d+(?:\.\d+)?\s*percent", q):
             return True
         if "\u221a" in q:
             return True
