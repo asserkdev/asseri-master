@@ -10,9 +10,11 @@ from pydantic import BaseModel, Field
 
 from .ai_core import AICore
 from .auth_store import AuthStore
+from .compute_engine import ComputeEngine
 from .fuzzy_match import FuzzyMatcher
 from .math_engine import MathEngine
 from .memory import MemoryStore
+from .runtime_config import load_runtime_config
 from .search_module import SearchModule
 
 
@@ -78,6 +80,18 @@ def _max_message_chars() -> int:
     except Exception:
         return 0
     return max(0, val)
+
+
+def _resolved_max_message_chars(request: Request) -> int:
+    env_value = _max_message_chars()
+    if env_value > 0:
+        return env_value
+    cfg = getattr(request.app.state, "runtime_config", {})
+    app_cfg = cfg.get("app", {}) if isinstance(cfg, dict) else {}
+    try:
+        return max(0, int(app_cfg.get("max_message_chars", 0)))
+    except Exception:
+        return 0
 
 
 def _extract_token(request: Request) -> str:
@@ -159,19 +173,35 @@ def _require_user_id(request: Request) -> str:
 
 
 def configure_app_state(app: FastAPI, data_file: Path) -> None:
+    base_dir = data_file.parent.parent.parent
+    runtime_config = load_runtime_config(base_dir)
     memory = MemoryStore(data_file)
     fuzzy = FuzzyMatcher()
-    math_engine = MathEngine()
+    compute_engine = ComputeEngine(config=runtime_config.get("compute", {}))
+    math_engine = MathEngine(compute_engine=compute_engine)
     search = SearchModule()
     auth_store = AuthStore(data_file.parent / "auth.json")
     app.state.ai_core = AICore(memory=memory, search=search, math_engine=math_engine, fuzzy=fuzzy)
     app.state.memory = memory
     app.state.auth_store = auth_store
+    app.state.runtime_config = runtime_config
+    app.state.compute_engine = compute_engine
 
 
 @api_router.get("/health")
 def health() -> dict[str, Any]:
     return {"status": "ok"}
+
+
+@api_router.get("/system/capabilities")
+def system_capabilities(request: Request) -> dict[str, Any]:
+    compute: ComputeEngine = request.app.state.compute_engine
+    runtime_config: dict[str, Any] = request.app.state.runtime_config
+    return {
+        "app": runtime_config.get("app", {}),
+        "compute": compute.capabilities(),
+        "learning": runtime_config.get("learning", {}),
+    }
 
 
 @api_router.post("/auth/register", response_model=AuthResponse)
@@ -409,7 +439,7 @@ def chat(payload: ChatRequest, request: Request) -> ChatResponse:
     ai: AICore = request.app.state.ai_core
     memory: MemoryStore = request.app.state.memory
     resolved = _require_user_id(request)
-    max_chars = _max_message_chars()
+    max_chars = _resolved_max_message_chars(request)
     if max_chars > 0 and len(payload.message) > max_chars:
         raise HTTPException(status_code=413, detail=f"Message too long. Maximum allowed is {max_chars} characters.")
     return _safe_chat(ai=ai, memory=memory, message=payload.message, session_id=payload.session_id, user_id=resolved)

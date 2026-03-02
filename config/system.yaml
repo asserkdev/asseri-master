@@ -1,0 +1,16 @@
+app:
+  name: "Asseri Modular AI"
+  version: "2.2.0"
+  max_message_chars: 0
+
+compute:
+  prefer_gpu: true
+  allow_torch_cuda: true
+  allow_native_cpp: false
+  max_matrix_size: 128
+
+learning:
+  max_candidate_updates_per_30_msgs: 10
+  min_candidate_confidence: 0.82
+  min_candidate_support_signals: 2
+

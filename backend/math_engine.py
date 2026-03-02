@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import ast
+import json
 import operator
 import re
 from functools import lru_cache
 from typing import Any
+
+from .compute_engine import ComputeEngine
 
 try:
     import sympy as sp
@@ -29,11 +32,14 @@ except Exception:
 
 def compute_math_confidence(query: str, result: dict) -> float:
     mode = str(result.get("_solve_mode", "failed")).strip().lower()
+    backend = str(result.get("_backend", "")).strip().lower()
 
     if mode == "symbolic":
         conf = 0.96
     elif mode == "arithmetic":
         conf = 0.90
+    elif mode == "matrix_compute":
+        conf = 0.94 if backend == "torch_cuda" else 0.91
     elif mode == "fallback_arithmetic":
         conf = 0.85
     else:
@@ -55,7 +61,7 @@ def compute_math_confidence(query: str, result: dict) -> float:
 class MathEngine:
     """Safe hybrid arithmetic + symbolic math engine."""
 
-    def __init__(self) -> None:
+    def __init__(self, compute_engine: ComputeEngine | None = None) -> None:
         self.ops = {
             ast.Add: operator.add,
             ast.Sub: operator.sub,
@@ -91,6 +97,7 @@ class MathEngine:
                 "exp": sp.exp,
                 "abs": sp.Abs,
             }
+        self.compute_engine = compute_engine or ComputeEngine()
 
     @staticmethod
     def is_math_query(text: str) -> bool:
@@ -119,6 +126,9 @@ class MathEngine:
             "percent",
             "sqrt",
             "root",
+            "matrix multiply",
+            "matmul",
+            "matrix product",
         ]
         if any(t in q for t in triggers):
             return True
@@ -251,6 +261,8 @@ class MathEngine:
         out = re.sub(r"^(?:what is|what's|whats|find|calculate|evaluate)\s+", "", out)
         out = re.sub(r"^solve\s*:\s*", "solve ", out)
         out = re.sub(r"^evaluate\s*:\s*", "evaluate ", out)
+        out = re.sub(r"\bmatrix multiplication\b", "matrix multiply", out)
+        out = re.sub(r"\bmat mul\b", "matmul", out)
 
         out = re.sub(r"(?<=\d)\s*x\s*(?=\d)", "*", out)
         out = re.sub(r"\s+", " ", out).strip(" .")
@@ -260,6 +272,23 @@ class MathEngine:
     def _normalize_words(text: str) -> str:
         normalized, _ = MathEngine._normalize_words_with_meta(text)
         return normalized
+
+    @staticmethod
+    def _extract_matrix_pair(text: str) -> tuple[list[list[float]], list[list[float]]] | None:
+        low = str(text or "").lower()
+        if not any(k in low for k in ["matrix multiply", "matmul", "matrix product"]):
+            return None
+        chunks = re.findall(r"\[\s*\[.*?\]\s*\]", text)
+        if len(chunks) < 2:
+            return None
+        try:
+            a = json.loads(chunks[0])
+            b = json.loads(chunks[1])
+        except Exception:
+            return None
+        if not isinstance(a, list) or not isinstance(b, list):
+            return None
+        return a, b
 
     @staticmethod
     def _format_number(value: float) -> str:
@@ -372,6 +401,7 @@ class MathEngine:
         fuzzy_corrected: bool = False,
         ambiguous_vars: bool = False,
         show_steps: bool = True,
+        backend_name: str = "",
     ) -> dict[str, Any]:
         payload = {
             "answer": str(answer).strip(),
@@ -379,6 +409,7 @@ class MathEngine:
             "_solve_mode": solve_mode,
             "_fuzzy_corrected": bool(fuzzy_corrected),
             "_ambiguous_vars": bool(ambiguous_vars),
+            "_backend": backend_name,
         }
         confidence = compute_math_confidence(query, payload)
         return {
@@ -413,6 +444,47 @@ class MathEngine:
                 ambiguous_vars=False,
                 show_steps=show_steps,
             )
+
+        matrix_pair = self._extract_matrix_pair(q)
+        if matrix_pair is not None:
+            try:
+                a, b = matrix_pair
+                comp = self.compute_engine.matmul(a, b)
+                result = comp.get("result", [])
+                backend = str(comp.get("backend", "python"))
+                device = str(comp.get("device", "cpu"))
+                rows_a = len(a)
+                cols_a = len(a[0]) if rows_a else 0
+                rows_b = len(b)
+                cols_b = len(b[0]) if rows_b else 0
+                steps = [
+                    f"Validated matrix dimensions: {rows_a}x{cols_a} multiplied by {rows_b}x{cols_b}.",
+                    f"Computed matrix product using {backend} on {device}.",
+                    f"Result matrix: {result}",
+                ]
+                refs = list(references) + [{"title": "Compute Engine", "url": "internal://compute-engine"}]
+                return self._build_response(
+                    query=raw,
+                    answer=str(result),
+                    steps=steps,
+                    solve_mode="matrix_compute",
+                    references=refs,
+                    fuzzy_corrected=fuzzy_corrected,
+                    ambiguous_vars=False,
+                    show_steps=show_steps,
+                    backend_name=backend,
+                )
+            except Exception as exc:
+                return self._build_response(
+                    query=raw,
+                    answer=f"Matrix computation failed safely: {exc}",
+                    steps=["Validated matrix request.", "Stopped due to safety/shape limits."],
+                    solve_mode="failed",
+                    references=references,
+                    fuzzy_corrected=fuzzy_corrected,
+                    ambiguous_vars=False,
+                    show_steps=show_steps,
+                )
 
         if not SYMPY_READY:
             try:

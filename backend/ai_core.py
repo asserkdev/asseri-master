@@ -3,6 +3,7 @@
 import re
 from typing import Any
 
+from .accuracy_policy import AccuracyPolicy
 from .fuzzy_match import FuzzyMatcher
 from .human_layer import HumanLayer
 from .math_engine import MathEngine
@@ -26,6 +27,7 @@ class AICore:
         self.math_engine = math_engine
         self.fuzzy = fuzzy
         self.human = HumanLayer()
+        self.accuracy = AccuracyPolicy()
         self._seed_graph()
 
     def _seed_graph(self) -> None:
@@ -386,12 +388,20 @@ class AICore:
         compact = re.sub(r"\s+", " ", query.strip().lower())
         if not compact:
             return True
+        asked_definition = bool(
+            re.match(r"^(what is|what are|who is|where is|when is|why is|how is|tell me about|explain)\s+", compact)
+        )
         trimmed = re.sub(
             r"^(what is|what are|who is|where is|when is|why is|how is|tell me about|explain)\s+",
             "",
             compact,
         )
         tokens = [t for t in re.findall(r"[a-z0-9]+", trimmed) if len(t) >= 2]
+        if asked_definition and len(tokens) == 1:
+            generic = {"it", "this", "that", "thing", "stuff", "something", "anything"}
+            tok = tokens[0]
+            if tok not in generic and len(tok) >= 4:
+                return False
         if len(tokens) <= 1:
             return True
         return False
@@ -808,16 +818,25 @@ class AICore:
                 if sim >= 0.45:
                     return True, "Consistent with curated internal knowledge."
 
-        web = self.search.search(normalized_topic)
-        web_answer = self._strip_conf(str(web.get("answer", ""))).strip()
-        web_refs = list(web.get("references", []))
-        if web_answer and "could not find a high-confidence summary" not in web_answer.lower():
-            sim = self._path_consistency(candidate_clean, web_answer)
-            source_rel = self._source_reliability(web_refs)
-            if sim >= 0.42 and source_rel >= 0.72:
-                return True, "Supported by trusted web evidence."
-            if sim <= 0.1 and source_rel >= 0.78:
-                return False, "Strong mismatch against trusted web evidence."
+        topic_intent = self._intent(normalized_topic)
+        if self._should_search_web(
+            query=normalized_topic,
+            topic=self._topic_from_query(normalized_topic),
+            intent=topic_intent,
+            has_internal_candidate=bool(internal or deterministic),
+            understanding_conf=0.9,
+            user_id=None,
+        ):
+            web = self.search.search(normalized_topic)
+            web_answer = self._strip_conf(str(web.get("answer", ""))).strip()
+            web_refs = list(web.get("references", []))
+            if web_answer and "could not find a high-confidence summary" not in web_answer.lower():
+                sim = self._path_consistency(candidate_clean, web_answer)
+                source_rel = self._source_reliability(web_refs)
+                if sim >= 0.42 and source_rel >= 0.72:
+                    return True, "Supported by trusted web evidence."
+                if sim <= 0.1 and source_rel >= 0.78:
+                    return False, "Strong mismatch against trusted web evidence."
         return False, "No strong external or internal support yet."
 
     def _promote_candidate_if_ready(self, topic: str, user_id: str | None = None) -> tuple[bool, str]:
@@ -1434,12 +1453,27 @@ class AICore:
         paths: list[dict[str, Any]] = []
         notes: list[str] = ["Generate 3 independent reasoning paths when possible."]
         focus_tokens = self._focus_query_tokens(query)
+        path_intent = self._intent(query)
 
         learned = self.memory.get_rule(topic, user_id=user_id)
         if learned and isinstance(learned.get("current"), dict):
             current = learned["current"]
             learned_answer = str(current.get("answer", "")).strip()
             if learned_answer:
+                if (
+                    float(current.get("confidence", 0.0)) >= 0.9
+                    and bool(current.get("verified", True))
+                    and int(current.get("source_count", 1)) >= 2
+                ):
+                    notes.append("High-confidence learned rule available; skipped external web search.")
+                    return {
+                        "answer": learned_answer,
+                        "references": [{"title": "Learned Memory Rule", "url": f"memory://rules/{topic.replace(' ', '_')}"}],
+                        "confidence": self._clamp(float(current.get("confidence", 0.9)), 0.05, 0.95),
+                        "relevance": self._query_answer_relevance(query, learned_answer),
+                        "focus_overlap": self._query_answer_relevance(query, learned_answer),
+                        "notes": notes,
+                    }
                 paths.append(
                     {
                         "name": "learned_rule",
@@ -1449,7 +1483,8 @@ class AICore:
                     }
                 )
 
-        for idx, variant in enumerate(self._query_variants(query, topic)):
+        variant_limit = self.accuracy.search_variants_limit(query, must_search=True)
+        for idx, variant in enumerate(self._query_variants(query, topic)[: max(1, variant_limit)]):
             result = self.search.search(variant)
             paths.append(
                 {
@@ -1465,7 +1500,7 @@ class AICore:
             if len(paths) >= 4:
                 break
 
-        while len(paths) < 3:
+        while len(paths) < 2:
             result = self.search.search(query)
             paths.append(
                 {
@@ -1487,8 +1522,12 @@ class AICore:
             relevance = self._query_answer_relevance(query, str(p.get("answer", "")))
             answer_tokens = self._token_set(str(p.get("answer", "")))
             focus_overlap = (len(focus_tokens & answer_tokens) / max(len(focus_tokens), 1)) if focus_tokens else 0.0
+            trust = self._source_reliability(list(p.get("references", [])))
+            support_count = max(1, int(p.get("support_count", 1)))
             p["relevance"] = relevance
             p["focus_overlap"] = focus_overlap
+            p["trust"] = trust
+            p["support_count"] = support_count
             p["score"] += min(0.12, relevance * 0.22)
             if relevance < 0.12:
                 p["score"] -= 0.2
@@ -1497,9 +1536,22 @@ class AICore:
             elif focus_tokens and focus_overlap >= 0.6:
                 p["score"] += 0.05
             p["score"] += self._quality_adjustment(str(p.get("answer", "")), list(p.get("references", [])))
-            p["score"] += min(0.06, self._source_reliability(list(p.get("references", []))) * 0.06)
+            p["score"] += min(0.06, trust * 0.06)
             p["score"] += min(0.08, max(0.0, float(p.get("consensus_score", 0.0))) * 0.08)
-            p["score"] += min(0.06, max(0, int(p.get("support_count", 1)) - 1) * 0.03)
+            p["score"] += min(0.06, max(0, support_count - 1) * 0.03)
+            accepted, accept_reason = self.accuracy.should_accept_candidate(
+                query=query,
+                answer=str(p.get("answer", "")),
+                intent=path_intent,
+                relevance=relevance,
+                focus_overlap=focus_overlap,
+                trust=trust,
+                support_count=support_count,
+            )
+            p["accepted"] = accepted
+            p["accept_reason"] = accept_reason
+            if not accepted:
+                p["score"] -= 0.25
             if not p["answer"]:
                 p["score"] -= 0.1
             if not p["references"]:
@@ -1507,6 +1559,11 @@ class AICore:
 
         scored = sorted(paths, key=lambda p: float(p["score"]), reverse=True)
         best = scored[0] if scored else {"answer": "", "references": [], "score": 0.45, "name": "none"}
+        accepted_scored = [p for p in scored if bool(p.get("accepted", True))]
+        if accepted_scored:
+            best = accepted_scored[0]
+        elif scored:
+            notes.append("No candidate passed relevance/trust acceptance policy.")
         if len(scored) > 1:
             top_consistency = self._path_consistency(str(scored[0].get("answer", "")), str(scored[1].get("answer", "")))
             if top_consistency >= 0.5:
@@ -1524,6 +1581,8 @@ class AICore:
             notes.append("Best path has low query relevance; avoid overcommitting.")
         if focus_tokens and float(best.get("focus_overlap", 0.0)) < 0.34:
             notes.append("Best path weakly matches focus terms; likely off-topic.")
+        if not bool(best.get("accepted", True)):
+            notes.append(f"Best path rejected by acceptance policy: {best.get('accept_reason', 'unknown')}.")
         return {
             "answer": str(best.get("answer", "")).strip(),
             "references": list(best.get("references", [])),
@@ -1633,6 +1692,25 @@ class AICore:
                 "could not find a high-confidence summary",
                 "provisional answer:",
             ]
+        )
+
+    def _should_search_web(
+        self,
+        query: str,
+        topic: str,
+        intent: str,
+        has_internal_candidate: bool,
+        understanding_conf: float,
+        user_id: str | None = None,
+    ) -> bool:
+        stats = self.memory.get_topic_stats(topic, user_id=user_id)
+        return self.accuracy.should_search_web(
+            query=query,
+            topic=topic,
+            intent=intent,
+            has_internal_candidate=has_internal_candidate,
+            understanding_conf=understanding_conf,
+            topic_stats=stats,
         )
 
     def _ensure_references(self, intent: str, query: str, refs: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -2525,6 +2603,14 @@ class AICore:
                 else (self._internal_knowledge_lookup(normalized, topic) if intent in {"knowledge", "problem_solving"} else None)
             )
         )
+        should_search_web = self._should_search_web(
+            query=normalized,
+            topic=topic,
+            intent=intent,
+            has_internal_candidate=bool(internal_candidate),
+            understanding_conf=understanding_conf,
+            user_id=user_id,
+        )
 
         if intent in {"knowledge", "problem_solving"} and not internal_candidate and self._is_overly_ambiguous_query(normalized):
             conf = 0.58
@@ -2611,13 +2697,42 @@ class AICore:
                     path_steps = list(internal.get("reasoning_steps", [])) if isinstance(internal.get("reasoning_steps"), list) else []
                     path_steps += ["Used curated internal knowledge for core concept.", "Structured reasoning steps generated."]
                 else:
-                    result = self._knowledge_multi_path(normalized, topic, user_id=user_id)
-                    base_answer = self._format_problem_answer(normalized, str(result.get("answer", "")).strip())
-                    refs = list(result.get("references", []))
-                    base_conf = float(result.get("confidence", 0.6))
-                    knowledge_relevance = float(result.get("relevance", 1.0))
-                    knowledge_focus_overlap = float(result.get("focus_overlap", 0.0))
-                    path_steps = list(result.get("notes", [])) + ["Structured reasoning steps generated."]
+                    if should_search_web:
+                        result = self._knowledge_multi_path(normalized, topic, user_id=user_id)
+                        raw_candidate = str(result.get("answer", "")).strip()
+                        rejection_flag = any(
+                            "acceptance policy" in str(note).lower() for note in list(result.get("notes", []))
+                        )
+                        if rejection_flag or not raw_candidate:
+                            base_answer = (
+                                f"I may be missing your intent for '{normalized}'. "
+                                "Please clarify the topic in one sentence so I can answer precisely."
+                            )
+                            refs = [{"title": "Clarification Needed", "url": "internal://clarification"}]
+                            base_conf = 0.55
+                            knowledge_relevance = 0.0
+                            knowledge_focus_overlap = 0.0
+                            path_steps = list(result.get("notes", [])) + [
+                                "Web candidates failed acceptance policy.",
+                                "Requested clarification instead of low-quality answer.",
+                            ]
+                        else:
+                            base_answer = self._format_problem_answer(normalized, raw_candidate)
+                            refs = list(result.get("references", []))
+                            base_conf = float(result.get("confidence", 0.6))
+                            knowledge_relevance = float(result.get("relevance", 1.0))
+                            knowledge_focus_overlap = float(result.get("focus_overlap", 0.0))
+                            path_steps = list(result.get("notes", [])) + ["Structured reasoning steps generated."]
+                    else:
+                        base_answer = (
+                            f"I need a bit more context to answer '{normalized}' accurately. "
+                            "Please clarify the topic."
+                        )
+                        refs = [{"title": "Clarification Needed", "url": "internal://clarification"}]
+                        base_conf = 0.56
+                        knowledge_relevance = 0.0
+                        knowledge_focus_overlap = 0.0
+                        path_steps = ["Search policy blocked web lookup due low-value query pattern.", "Requested clarification."]
             else:
                 internal = internal_candidate
                 if internal:
@@ -2629,13 +2744,42 @@ class AICore:
                     path_steps = list(internal.get("reasoning_steps", [])) if isinstance(internal.get("reasoning_steps"), list) else []
                     path_steps += ["Used curated internal knowledge for core concept."]
                 else:
-                    result = self._knowledge_multi_path(normalized, topic, user_id=user_id)
-                    base_answer = str(result.get("answer", "")).strip()
-                    refs = list(result.get("references", []))
-                    base_conf = float(result.get("confidence", 0.6))
-                    knowledge_relevance = float(result.get("relevance", 1.0))
-                    knowledge_focus_overlap = float(result.get("focus_overlap", 0.0))
-                    path_steps = list(result.get("notes", []))
+                    if should_search_web:
+                        result = self._knowledge_multi_path(normalized, topic, user_id=user_id)
+                        raw_candidate = str(result.get("answer", "")).strip()
+                        rejection_flag = any(
+                            "acceptance policy" in str(note).lower() for note in list(result.get("notes", []))
+                        )
+                        if rejection_flag or not raw_candidate:
+                            base_answer = (
+                                f"I may be matching the wrong topic for '{normalized}'. "
+                                "Please clarify what you mean."
+                            )
+                            refs = [{"title": "Clarification Needed", "url": "internal://clarification"}]
+                            base_conf = 0.55
+                            knowledge_relevance = 0.0
+                            knowledge_focus_overlap = 0.0
+                            path_steps = list(result.get("notes", [])) + [
+                                "Web candidates failed acceptance policy.",
+                                "Requested clarification instead of weak match.",
+                            ]
+                        else:
+                            base_answer = raw_candidate
+                            refs = list(result.get("references", []))
+                            base_conf = float(result.get("confidence", 0.6))
+                            knowledge_relevance = float(result.get("relevance", 1.0))
+                            knowledge_focus_overlap = float(result.get("focus_overlap", 0.0))
+                            path_steps = list(result.get("notes", []))
+                    else:
+                        base_answer = (
+                            f"I need a bit more context to answer '{normalized}' accurately. "
+                            "Please clarify what you mean."
+                        )
+                        refs = [{"title": "Clarification Needed", "url": "internal://clarification"}]
+                        base_conf = 0.56
+                        knowledge_relevance = 0.0
+                        knowledge_focus_overlap = 0.0
+                        path_steps = ["Search policy blocked web lookup due low-value query pattern.", "Requested clarification."]
 
         if intent in {"knowledge", "problem_solving"}:
             token_count = len(self._token_set(normalized))
@@ -2701,6 +2845,11 @@ class AICore:
 
         final_answer = self._attach_conf(reflected_answer, final_conf)
         self.memory.update_topic_stats(topic, "answers", user_id=user_id)
+        outcome = self.accuracy.classify_answer_outcome(final_conf, reflected_answer)
+        if outcome == "likely_correct":
+            self.memory.update_topic_stats(topic, "likely_correct", user_id=user_id)
+        elif outcome == "likely_incorrect":
+            self.memory.update_topic_stats(topic, "likely_incorrect", user_id=user_id)
         self.memory.record_experience(session_id, raw, final_answer, intent, final_conf, refs, user_id=user_id)
         self.memory.append_message(session_id, "assistant", final_answer, user_id=user_id)
         self._update_graph_from_text(normalized, reflected_answer, user_id=user_id)

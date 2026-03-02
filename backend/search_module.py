@@ -224,8 +224,23 @@ class SearchModule:
         if not base_ok:
             return False
         low_q = query.lower()
+        low_t = text.lower()
+        asks_media = any(k in low_q for k in ["movie", "film", "song", "album", "series", "tv", "music", "play"])
+        if not asks_media and any(
+            marker in low_t
+            for marker in [
+                " is a song",
+                " is an album",
+                " is a film",
+                " is an american film",
+                " is a television series",
+                " is a tv series",
+                " is a musical",
+                "is a play by",
+            ]
+        ):
+            return False
         if any(k in low_q for k in ["purpose of", "job of", "role of", "function of"]):
-            low_t = text.lower()
             function_markers = [
                 "purpose",
                 "used for",

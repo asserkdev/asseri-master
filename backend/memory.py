@@ -538,9 +538,13 @@ class MemoryStore:
                     "confirmations": 0,
                     "corrections": 0,
                     "mistakes": 0,
+                    "likely_correct": 0,
+                    "likely_incorrect": 0,
                     "last_seen": "",
                 },
             )
+            stats.setdefault("likely_correct", 0)
+            stats.setdefault("likely_incorrect", 0)
             if event in stats:
                 stats[event] = int(stats.get(event, 0)) + 1
             stats["last_seen"] = now_iso()
@@ -548,7 +552,16 @@ class MemoryStore:
             confirms = int(stats.get("confirmations", 0))
             corrections = int(stats.get("corrections", 0))
             mistakes = int(stats.get("mistakes", 0))
-            weight = (questions * 1.0) + (confirms * 2.5) - (corrections * 1.8) - (mistakes * 1.2)
+            likely_correct = int(stats.get("likely_correct", 0))
+            likely_incorrect = int(stats.get("likely_incorrect", 0))
+            weight = (
+                (questions * 1.0)
+                + (confirms * 2.5)
+                - (corrections * 1.8)
+                - (mistakes * 1.2)
+                + (likely_correct * 0.6)
+                - (likely_incorrect * 0.6)
+            )
             state["topic_weights"][topic] = round(weight, 3)
             self._save()
 

@@ -5,3 +5,4 @@ sympy>=1.13.0
 numpy>=2.0.0
 requests>=2.32.0
 rapidfuzz>=3.9.0
+PyYAML>=6.0.2
