@@ -1068,12 +1068,14 @@ class AICore:
         if re.fullmatch(r"-?\d+\.\d+", clean):
             clean = clean.rstrip("0").rstrip(".")
         if not steps:
-            return clean
+            return f"Final answer:\n{clean}" if clean else ""
         lines = ["Step-by-step solution:"]
         for idx, step in enumerate(steps, start=1):
             lines.append(f"{idx}. {step}")
         if clean:
-            lines.append(f"Final answer: {clean}")
+            lines.append("")
+            lines.append("Final answer:")
+            lines.append(clean)
         return "\n".join(lines)
 
     @staticmethod
@@ -1135,13 +1137,15 @@ class AICore:
         base = self._strip_conf(answer).strip()
         if not base or mode == "standard":
             return base
-        if mode == "simple":
-            if intent == "math":
+        if intent == "math":
+            if mode == "simple":
                 lines = [line.strip() for line in base.splitlines() if line.strip()]
                 if len(lines) > 6:
                     lines = lines[:5] + [lines[-1]]
                 compact = "\n".join(lines)
                 return self._simple_rewrite(compact)
+            return base
+        if mode == "simple":
             return self._simple_rewrite(base)
         return self._advanced_rewrite(base, intent)
 
@@ -1595,6 +1599,8 @@ class AICore:
     def _resolve_query_context(self, session_id: str, raw: str, user_id: str | None = None) -> str:
         if self._is_feedback_like_text(raw):
             return raw
+        if self.math_engine.is_math_query(raw):
+            return raw
         if not self._is_followup_query(raw):
             return raw
         last_user = self.memory.last_by_role(session_id, "user", skip_texts={raw.lower()}, user_id=user_id)
@@ -1724,6 +1730,8 @@ class AICore:
         self.memory.append_message(session_id, "user", raw, user_id=user_id)
         normalized = self._resolve_query_context(session_id, normalized, user_id=user_id)
         normalized = self._semantic_normalize(normalized)
+        if self.math_engine.is_math_query(normalized) or self.math_engine.is_math_query(raw):
+            normalized = self.fuzzy.normalize_math_text(normalized)
         previous_assistant = self.memory.last_by_role(session_id, "assistant", user_id=user_id)
 
         claimed_name = self._extract_user_name_claim(raw)
@@ -2423,7 +2431,7 @@ class AICore:
             "references": refs,
             "fuzzy_corrections": corrections,
             "confidence": int(round(final_conf * 100)),
-            "reflection_steps": reflection_steps,
+            "reflection_steps": [] if intent == "math" else reflection_steps,
             "topic": topic,
             "related_concepts": self.memory.graph_neighbors(topic, limit=4, user_id=user_id),
         }

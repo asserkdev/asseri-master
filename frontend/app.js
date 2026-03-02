@@ -217,7 +217,7 @@ function extractConfidenceFromText(text) {
 function formatAssistantText(payload) {
   const parts = [payload.answer || ""];
   const intent = String(payload.intent || "");
-  const showTrace = intent === "math" || intent === "problem_solving";
+  const showTrace = localStorage.getItem("asseri_debug_trace") === "1";
   if (showTrace && Array.isArray(payload.reflection_steps) && payload.reflection_steps.length) {
     const steps = payload.reflection_steps.map((step, idx) => `${idx + 1}. ${step}`).join("\n");
     parts.push(`Reasoning trace:\n${steps}`);

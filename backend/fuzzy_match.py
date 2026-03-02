@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from collections import OrderedDict
 from difflib import get_close_matches
 from typing import Iterable
 
@@ -11,6 +12,9 @@ try:
 except Exception:
     process = None
     RAPIDFUZZ_READY = False
+
+MATH_CORRECTION_MEMORY: OrderedDict[str, str] = OrderedDict()
+MAX_MATH_CORRECTION_MEMORY = 200
 
 
 class FuzzyMatcher:
@@ -170,7 +174,71 @@ class FuzzyMatcher:
             "souces": "sources",
             "discovry": "discovery",
             "logial": "logical",
+            "pluss": "plus",
+            "minuss": "minus",
+            "devide": "divide",
+            "divde": "divide",
+            "multply": "multiply",
+            "squre": "square",
+            "sqare": "square",
+            "derivitive": "derivative",
+            "intergrate": "integrate",
+            "limt": "limit",
+            "slove": "solve",
+            "solv": "solve",
         }
+
+    @staticmethod
+    def _memory_key(text: str) -> str:
+        return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+    @staticmethod
+    def _remember_math_correction(original_text: str, corrected_text: str) -> None:
+        key = FuzzyMatcher._memory_key(original_text)
+        val = FuzzyMatcher._memory_key(corrected_text)
+        if not key or not val or key == val:
+            return
+        if key in MATH_CORRECTION_MEMORY:
+            del MATH_CORRECTION_MEMORY[key]
+        MATH_CORRECTION_MEMORY[key] = val
+        while len(MATH_CORRECTION_MEMORY) > MAX_MATH_CORRECTION_MEMORY:
+            MATH_CORRECTION_MEMORY.popitem(last=False)
+
+    @staticmethod
+    def normalize_math_text(text: str) -> str:
+        original = str(text or "")
+        key = FuzzyMatcher._memory_key(original)
+        if key in MATH_CORRECTION_MEMORY:
+            corrected = MATH_CORRECTION_MEMORY[key]
+            # Refresh recency ordering.
+            del MATH_CORRECTION_MEMORY[key]
+            MATH_CORRECTION_MEMORY[key] = corrected
+            return corrected
+
+        out = original.lower()
+        corrections = {
+            "pluss": "plus",
+            "minuss": "minus",
+            "devide": "divide",
+            "divde": "divide",
+            "multply": "multiply",
+            "squre": "square",
+            "sqare": "square",
+            "derivitive": "derivative",
+            "intergrate": "integrate",
+            "limt": "limit",
+            "slove": "solve",
+            "solv": "solve",
+        }
+        for wrong, right in corrections.items():
+            out = re.sub(rf"\b{re.escape(wrong)}\b", right, out)
+
+        out = re.sub(r"(\d)([a-z])", r"\1 \2", out)
+        out = re.sub(r"([a-z])(\d)", r"\1 \2", out)
+        out = re.sub(r"\s+", " ", out).strip()
+        if out != key:
+            FuzzyMatcher._remember_math_correction(original, out)
+        return out
 
     def analyze_text(self, text: str) -> dict[str, object]:
         parts = re.findall(r"[a-zA-Z0-9']+|[^a-zA-Z0-9']+", text)
