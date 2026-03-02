@@ -412,17 +412,6 @@ body {
   overflow: hidden;
 }
 
-.lego {
-  position: absolute;
-  top: -6px;
-  left: -6px;
-  width: 40px;
-  height: 22px;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid #1a2a47;
-  border-radius: 4px;
-}
-
 .confidence-marker {
   position: absolute;
   top: -2px;
