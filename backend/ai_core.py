@@ -266,7 +266,20 @@ class AICore:
         return "standard", "default"
 
     def _extract_tone_command(self, text: str) -> str | None:
-        return self.human.extract_tone_command(text)
+        tone = self.human.extract_tone_command(text)
+        if tone:
+            return tone
+        compact = re.sub(r"[^\w\s]", " ", str(text or "").lower())
+        compact = re.sub(r"\s+", " ", compact).strip()
+        if compact.startswith("set tone to "):
+            raw = compact[len("set tone to ") :].strip().split(" ")[0]
+            if raw in HumanLayer.TONES:
+                return raw
+        if compact.startswith("set style to "):
+            raw = compact[len("set style to ") :].strip().split(" ")[0]
+            if raw in HumanLayer.TONES:
+                return raw
+        return None
 
     def _stored_tone_mode(self, user_id: str | None = None) -> str:
         payload = self.memory.get_user_fact("tone_mode", user_id=user_id)

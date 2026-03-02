@@ -22,12 +22,34 @@ class HumanLayer:
             "direct": "direct",
             "brief": "direct",
         }
+        compact = re.sub(r"[^\w\s]", " ", t)
+        compact = re.sub(r"\s+", " ", compact).strip()
+        if compact.startswith("set tone to "):
+            raw = compact[len("set tone to ") :].strip().split(" ")[0]
+            tone = alias.get(raw, raw)
+            if tone in HumanLayer.TONES:
+                return tone
+        if compact.startswith("set style to "):
+            raw = compact[len("set style to ") :].strip().split(" ")[0]
+            tone = alias.get(raw, raw)
+            if tone in HumanLayer.TONES:
+                return tone
+        if compact.startswith("tone "):
+            raw = compact[len("tone ") :].strip().split(" ")[0]
+            tone = alias.get(raw, raw)
+            if tone in HumanLayer.TONES:
+                return tone
+        if compact.startswith("style "):
+            raw = compact[len("style ") :].strip().split(" ")[0]
+            tone = alias.get(raw, raw)
+            if tone in HumanLayer.TONES:
+                return tone
         for pattern in [
-            r"^(?:set|change|switch)\s+(?:tone|style)\s+(?:to\s+)?([a-z]+)$",
-            r"^(?:be|talk)\s+(?:more\s+)?([a-z]+)$",
-            r"^(?:tone|style)\s*[:=]?\s*([a-z]+)$",
+            r"^(?:set|change|switch)\s+(?:tone|style)\s+(?:to\s+)?([a-z]+)\b",
+            r"^(?:be|talk)\s+(?:more\s+)?([a-z]+)\b",
+            r"^(?:tone|style)\s*[:=]?\s*([a-z]+)\b",
         ]:
-            m = re.search(pattern, t)
+            m = re.search(pattern, compact)
             if not m:
                 continue
             raw = m.group(1).strip()
