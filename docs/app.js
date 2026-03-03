@@ -259,6 +259,13 @@ function initLogoFallback() {
     return;
   }
   const candidates = [
+    "./logo.svg",
+    "logo.svg",
+    "../logo.svg",
+    "/logo.svg",
+    "/asseri-master/logo.svg",
+    "/asseri-master/docs/logo.svg",
+    "/asseri-master/frontend/logo.svg",
     "./logo.png",
     "logo.png",
     "../logo.png",
