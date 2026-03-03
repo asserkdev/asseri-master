@@ -235,12 +235,14 @@ class MemoryStore:
                 "tags": [],
                 "pinned_messages": [],
                 "messages": [],
+                "pending_fuzzy": None,
             }
         else:
             payload = sessions.get(sid)
             if isinstance(payload, dict):
                 payload.setdefault("tags", [])
                 payload.setdefault("pinned_messages", [])
+                payload.setdefault("pending_fuzzy", None)
         return sid
 
     @staticmethod
@@ -503,6 +505,40 @@ class MemoryStore:
                 return "New Chat"
             title = str(payload.get("title", "New Chat")).strip()
             return title or "New Chat"
+
+    def set_pending_fuzzy(self, session_id: str, payload: dict[str, Any] | None, user_id: str | None = None) -> None:
+        with self.lock:
+            state = self._state_no_lock(user_id)
+            sid = self._ensure_session_no_lock(session_id=session_id, user_id=user_id)
+            session = state["sessions"].get(sid, {})
+            if not isinstance(session, dict):
+                return
+            if payload and isinstance(payload, dict):
+                clean = {
+                    "original": str(payload.get("original", "")).strip()[:500],
+                    "suggested": str(payload.get("suggested", "")).strip()[:500],
+                    "created_at": str(payload.get("created_at", now_iso())).strip()[:64] or now_iso(),
+                    "corrections": list(payload.get("corrections", []))[:16],
+                }
+                session["pending_fuzzy"] = clean
+            else:
+                session["pending_fuzzy"] = None
+            session["updated_at"] = now_iso()
+            self._save()
+
+    def get_pending_fuzzy(self, session_id: str, user_id: str | None = None) -> dict[str, Any] | None:
+        with self.lock:
+            state = self._state_no_lock(user_id)
+            payload = state["sessions"].get(session_id, {})
+            if not isinstance(payload, dict):
+                return None
+            pending = payload.get("pending_fuzzy")
+            if not isinstance(pending, dict):
+                return None
+            return dict(pending)
+
+    def clear_pending_fuzzy(self, session_id: str, user_id: str | None = None) -> None:
+        self.set_pending_fuzzy(session_id, None, user_id=user_id)
 
     def pin_message(
         self,

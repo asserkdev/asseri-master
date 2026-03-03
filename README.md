@@ -7,7 +7,7 @@ sdk: docker
 app_port: 7860
 pinned: false
 ---
-# Asseri Modular AI System
+## Asseri Modular AI System
 
 Clean modular AI architecture with separate frontend/backend and optional acceleration layers.
 
@@ -93,13 +93,13 @@ asseri/
 pip install -r requirements.txt
 ```
 
-2. Start backend:
+1. Start backend:
 
 ```bash
 python main.py
 ```
 
-3. Open app:
+1. Open app:
 
 ```bash
 http://127.0.0.1:8000
@@ -160,10 +160,12 @@ GitHub Pages and Firebase Hosting serve only static frontend. Python backend mus
 ### Firebase Hosting (Configured)
 
 Project:
+
 - Project ID: `asseri-1`
 - Site: `asseri-1`
 
 Files added:
+
 - `.firebaserc`
 - `firebase.json`
 - `frontend/firebase-init.js`
@@ -179,16 +181,19 @@ firebase deploy --only hosting
 ```
 
 If you move backend from Hugging Face Spaces to another host, set your API URL in:
+
 - `frontend/firebase-init.js` -> `firebaseApiBase`
 - `docs/firebase-init.js` -> `firebaseApiBase`
 
 ### Hugging Face Spaces (No Card Path)
 
 This repo now includes:
+
 - `Dockerfile`
 - `.dockerignore`
 
 Steps:
+
 1. In Hugging Face, create a new **Space** with SDK = **Docker**.
 2. In terminal, authenticate:
 
@@ -197,7 +202,7 @@ pip install -U huggingface_hub
 huggingface-cli login
 ```
 
-3. Add Space git remote and push:
+1. Add Space git remote and push:
 
 ```bash
 git remote add hf https://huggingface.co/spaces/<YOUR_USERNAME>/<YOUR_SPACE_NAME>
@@ -205,7 +210,32 @@ git push hf main
 ```
 
 Notes:
+
 - Space runs on port `7860` automatically via `Dockerfile`.
 - This app serves frontend + backend from the same host in Spaces, so no `?api=` override is required there.
 
+## Structure Cleanup (Current)
 
+The repository now includes a clean structure guide and Arabic scaffold files:
+
+- `PROJECT_STRUCTURE.md`
+- `docs/architecture/arabic_plan.md`
+- `docs/architecture/commands.md`
+- `backend/nlp/`
+- `backend/nlp/arabic/` (scaffold only, no Arabic implementation yet)
+
+To begin Arabic coding phase, send:
+
+`Start Arabic implementation phase 1`
+
+## Structure Maintenance
+
+To keep `frontend/` and `docs/` consistent for deployment, run:
+
+```bash
+python scripts/sync_frontend_to_docs.py
+```
+
+Reference map:
+
+- `docs/architecture/repo_map.md`

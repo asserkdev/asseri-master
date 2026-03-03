@@ -104,27 +104,30 @@ class MathEngine:
         q = str(text or "").lower().strip()
         if not q:
             return False
-        triggers = [
-            "calculate",
-            "compute",
-            "evaluate",
-            "solve",
-            "equation",
-            "integrate",
-            "differentiate",
-            "derivative",
-            "simplify",
-            "expand",
-            "factor",
-            "limit",
-            "sqrt",
-            "root",
-            "matrix multiply",
-            "matmul",
-            "matrix product",
+
+        keyword_patterns = [
+            r"\bcalculate\b",
+            r"\bcompute\b",
+            r"\bevaluate\b",
+            r"\bsolve\b",
+            r"\bequation\b",
+            r"\bintegrate\b",
+            r"\bdifferentiate\b",
+            r"\bderivative\b",
+            r"\bsimplify\b",
+            r"\bexpand\b",
+            r"\bfactor\b",
+            r"\blimit\b",
+            r"\bsqrt\b",
+            r"\broot\b",
+            r"\bmatrix multiply\b",
+            r"\bmatmul\b",
+            r"\bmatrix product\b",
+            r"\b(احسب|حل|معادله|تكامل|اشتق|مشتقه|جذر|نسبه|بالميه|بالمئة)\b",
         ]
-        if any(t in q for t in triggers):
+        if any(re.search(pattern, q) for pattern in keyword_patterns):
             return True
+
         if re.search(r"(sum of|difference between|product of|quotient of)\s+-?\d", q):
             return True
         if re.search(r"(increase|decrease)\s+-?\d+(?:\.\d+)?\s+by\s+-?\d+(?:\.\d+)?\s*percent", q):
@@ -133,9 +136,14 @@ class MathEngine:
             return True
         if "\u221a" in q:
             return True
-        if re.search(r"[\d\)\(]\s*[\+\-\*\/\^%=]", q):
+
+        if re.search(r"-?\d+(?:\.\d+)?\s*[\+\*\/\^%=]\s*-?\d+(?:\.\d+)?", q):
             return True
-        if re.search(r"\b[xyz]\b", q) and "=" in q:
+        if re.search(r"-?\d+(?:\.\d+)?\s*-\s*-?\d+(?:\.\d+)?", q):
+            return True
+        if re.search(r"\d+\s*(?:زائد|ناقص|ضرب|قسمة|مقسوم\s+على)\s*\d+", q):
+            return True
+        if "=" in q and re.search(r"[0-9xyz\u0600-\u06ff]", q):
             return True
         return False
 
@@ -160,10 +168,14 @@ class MathEngine:
         for p in [
             r"\bstep by step\b",
             r"\bshow (?:the )?steps\b",
+            r"\bshow each step\b",
             r"\bshow (?:your )?work\b",
             r"\bwith steps\b",
             r"\bexplain each step\b",
             r"\band explain each step\b",
+            r"\bin real numbers and complex numbers\b",
+            r"\bin real numbers\b",
+            r"\bin complex numbers\b",
             r"\band explain\b",
         ]:
             t = re.sub(p, " ", t, flags=re.IGNORECASE)
@@ -188,6 +200,35 @@ class MathEngine:
         out = str(text or "").lower()
         fuzzy_corrected = False
 
+        # Normalize Arabic-Indic digits and punctuation early.
+        digit_map = str.maketrans(
+            {
+                "\u0660": "0",
+                "\u0661": "1",
+                "\u0662": "2",
+                "\u0663": "3",
+                "\u0664": "4",
+                "\u0665": "5",
+                "\u0666": "6",
+                "\u0667": "7",
+                "\u0668": "8",
+                "\u0669": "9",
+                "\u06f0": "0",
+                "\u06f1": "1",
+                "\u06f2": "2",
+                "\u06f3": "3",
+                "\u06f4": "4",
+                "\u06f5": "5",
+                "\u06f6": "6",
+                "\u06f7": "7",
+                "\u06f8": "8",
+                "\u06f9": "9",
+                "\u066b": ".",
+                "\u066c": "",
+            }
+        )
+        out = out.translate(digit_map)
+
         typo_corrections = {
             "pluss": "plus",
             "minuss": "minus",
@@ -210,6 +251,20 @@ class MathEngine:
 
         out = out.replace("\u00d7", "*").replace("\u00f7", "/").replace("\u2212", "-")
         out = out.replace("\u221a", "sqrt")
+
+        # Arabic math keywords.
+        out = re.sub(r"\b(احسب|اوجد|ايجاد)\b", "calculate", out)
+        out = re.sub(r"\bحل\b", "solve", out)
+        out = re.sub(r"\bمعادله\b", "equation", out)
+        out = re.sub(r"\bاشتق\b", "differentiate", out)
+        out = re.sub(r"\bمشتقه\b", "derivative", out)
+        out = re.sub(r"\bتكامل\b", "integrate", out)
+        out = re.sub(r"\bجذر\b", "sqrt", out)
+        out = re.sub(r"\bزائد\b", "+", out)
+        out = re.sub(r"\bناقص\b", "-", out)
+        out = re.sub(r"\bضرب\b", "*", out)
+        out = re.sub(r"\b(قسمة|مقسوم\s+على)\b", "/", out)
+        out = re.sub(r"\b(في)\b", "*", out)
 
         replacements = {
             "multiplied by": "*",
@@ -257,7 +312,7 @@ class MathEngine:
         out = re.sub(r"\bsqrt\s*\(\s*([^)]+?)\s*\)", r"sqrt(\1)", out)
         out = re.sub(r"\bsqrt\s+(-?\d+(?:\.\d+)?)", r"sqrt(\1)", out)
 
-        out = re.sub(r"^(?:what is|what's|whats|find|calculate|evaluate)\s+", "", out)
+        out = re.sub(r"^(?:what is|what's|whats|find|calculate|evaluate|ما هو|ما هي)\s+", "", out)
         out = re.sub(r"^solve\s*:\s*", "solve ", out)
         out = re.sub(r"^evaluate\s*:\s*", "evaluate ", out)
         out = re.sub(r"\bmatrix multiplication\b", "matrix multiply", out)

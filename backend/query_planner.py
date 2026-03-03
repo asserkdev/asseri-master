@@ -9,7 +9,8 @@ class QueryPlanner:
 
     @staticmethod
     def _tokens(text: str) -> list[str]:
-        return [t for t in re.findall(r"[a-z0-9]+", str(text or "").lower()) if t]
+        pattern = r"[a-z0-9\u0600-\u06FF]+"
+        return [t for t in re.findall(pattern, str(text or "").lower()) if t]
 
     @staticmethod
     def _is_vague(query: str) -> bool:
@@ -17,7 +18,24 @@ class QueryPlanner:
         tokens = QueryPlanner._tokens(q)
         if len(tokens) <= 1:
             return True
-        vague_set = {"it", "this", "that", "thing", "stuff", "something", "anything", "there", "here"}
+        vague_set = {
+            "it",
+            "this",
+            "that",
+            "thing",
+            "stuff",
+            "something",
+            "anything",
+            "there",
+            "here",
+            "هذا",
+            "هذه",
+            "ذلك",
+            "شيء",
+            "حاجة",
+            "هناك",
+            "هنا",
+        }
         if len(tokens) <= 3 and all(t in vague_set or len(t) <= 2 for t in tokens):
             return True
         return False
@@ -36,6 +54,12 @@ class QueryPlanner:
             "this month",
             "sources",
             "references",
+            "احدث",
+            "اليوم",
+            "اخبار",
+            "حاليا",
+            "مصادر",
+            "مراجع",
         }
         return any(m in q for m in markers)
 
@@ -43,7 +67,7 @@ class QueryPlanner:
     def _query_complexity(query: str) -> str:
         tokens = QueryPlanner._tokens(query)
         q = str(query or "").lower()
-        if len(tokens) >= 18 or any(k in q for k in ["compare", "analyze", "prove", "derive", "step by step"]):
+        if len(tokens) >= 18 or any(k in q for k in ["compare", "analyze", "prove", "derive", "step by step", "قارن", "حلل", "اثبت", "اشرح خطوة"]):
             return "high"
         if len(tokens) >= 9:
             return "medium"
@@ -73,7 +97,7 @@ class QueryPlanner:
         if intent in {"math", "casual", "feedback", "safety"}:
             route = intent
             allow_web = False
-        elif understanding_conf < 0.58 or vague:
+        elif (understanding_conf < 0.42 and not has_internal_candidate) or vague:
             route = "clarify"
             allow_web = False
             request_clarification = True
@@ -110,4 +134,3 @@ class QueryPlanner:
             "needs_fresh_web": needs_fresh_web,
             "topic": topic,
         }
-
