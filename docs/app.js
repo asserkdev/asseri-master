@@ -1,5 +1,5 @@
 function resolveApiBase() {
-  const defaultLegacyApi = "https://asseri--asserkdev.replit.app";
+  const defaultHostedApi = "https://asserk-asseri.hf.space";
   const isGitHubPages =
     window.location.hostname === "asserkdev.github.io" &&
     window.location.pathname.toLowerCase().includes("/asseri-master");
@@ -10,7 +10,7 @@ function resolveApiBase() {
   const fromStorage = (localStorage.getItem("asseri_api_base") || "").trim();
   const fromWindow = (window.APP_API_BASE || "").trim();
   const fromFirebase = (window.ASSERI_FIREBASE_API_BASE || "").trim();
-  const fromDefault = isFirebaseHosting ? fromFirebase : isGitHubPages ? defaultLegacyApi : "";
+  const fromDefault = isFirebaseHosting ? (fromFirebase || defaultHostedApi) : isGitHubPages ? defaultHostedApi : "";
   const chosen = fromQuery || fromWindow || fromDefault || fromStorage;
   if (chosen) {
     localStorage.setItem("asseri_api_base", chosen);

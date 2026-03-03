@@ -143,7 +143,7 @@ GitHub Pages and Firebase Hosting serve only static frontend. Python backend mus
 
 - GitHub Pages URL: `https://asserkdev.github.io/asseri-master/`
 - Firebase Hosting URL: `https://asseri-1.web.app`
-- Current backend URL: `https://asseri--asserkdev.replit.app`
+- Current backend URL: `https://asserk-asseri.hf.space`
 - Optional override: pass `?api=<custom-backend-url>` in the query string.
 
 ### Firebase Hosting (Configured)
@@ -167,7 +167,7 @@ firebase use asseri-1
 firebase deploy --only hosting
 ```
 
-If you move backend from Replit to Cloud Run, set your API URL in:
+If you move backend from Hugging Face Spaces to another host, set your API URL in:
 - `frontend/firebase-init.js` -> `firebaseApiBase`
 - `docs/firebase-init.js` -> `firebaseApiBase`
 

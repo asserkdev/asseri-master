@@ -10,9 +10,9 @@
     appId: "1:962505507485:web:6f7d387c3d3fb420558a74",
   };
 
-  // Optional API endpoint for Firebase-hosted frontend. Set this to your Cloud Run URL.
-  // Example: https://asseri-api-abc123-uc.a.run.app
-  const firebaseApiBase = "";
+  // Default backend endpoint for Firebase-hosted frontend.
+  // Override with window.APP_API_BASE or ?api=... when needed.
+  const firebaseApiBase = "https://asserk-asseri.hf.space";
 
   window.ASSERI_FIREBASE_CONFIG = firebaseConfig;
   window.ASSERI_FIREBASE_API_BASE = firebaseApiBase;
