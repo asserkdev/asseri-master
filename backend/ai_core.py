@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from typing import Any
@@ -1354,11 +1354,43 @@ class AICore:
                 except Exception:
                     return None
         return None
+    def _recent_user_greeting_streak(self, session_id: str | None = None, user_id: str | None = None) -> int:
+        if not session_id:
+            return 0
+        greetings = {"hi", "hello", "hey"}
+        history = self.memory.get_history(session_id, user_id=user_id)
+        if not history:
+            return 0
+        streak = 0
+        for row in reversed(history):
+            if str(row.get("role", "")).lower() != "user":
+                continue
+            content = re.sub(r"\s+", " ", str(row.get("content", "")).strip().lower())
+            content = re.sub(r"[^a-z\s]", " ", content)
+            content = re.sub(r"\s+", " ", content).strip()
+            if content in greetings:
+                streak += 1
+                if streak >= 8:
+                    break
+                continue
+            break
+        return streak
 
     def _casual_answer(self, query: str, user_id: str | None = None, session_id: str | None = None) -> dict[str, Any]:
         q = query.lower().strip()
-        if q in {"hi", "hello", "hey"}:
-            return {"answer": "Hi. I am ready to help.", "confidence": 0.86, "references": []}
+        q_compact = re.sub(r"[^a-z\s]", " ", q)
+        q_compact = re.sub(r"\s+", " ", q_compact).strip()
+        if q_compact in {"hi", "hello", "hey"}:
+            streak = self._recent_user_greeting_streak(session_id=session_id, user_id=user_id)
+            if streak >= 5:
+                answer = "Hi again. Ask anything and I will answer directly."
+            elif streak >= 3:
+                answer = "Hi again. What do you want help with right now?"
+            elif streak >= 2:
+                answer = "Hello again. I am here and ready when you are."
+            else:
+                answer = "Hi. I am ready to help."
+            return {"answer": answer, "confidence": 0.86, "references": []}
         if "your name" in q or "who are you" in q:
             return {"answer": "I am Asseri AI.", "confidence": 0.96, "references": []}
         if any(p in q for p in ["who am i", "who i am", "what is my name", "what's my name", "whats my name", "my username", "my account", "am i signed in"]):

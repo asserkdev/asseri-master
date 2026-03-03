@@ -8,6 +8,26 @@ class HumanLayer:
     """Tone shaping + safety policy department."""
 
     TONES = {"formal", "friendly", "casual", "chill", "direct"}
+    @staticmethod
+    def _is_short_or_greeting(text: str) -> bool:
+        low = re.sub(r"\s+", " ", str(text or "").strip().lower())
+        if not low:
+            return True
+        greeting_starts = (
+            "hi",
+            "hello",
+            "hey",
+            "i am asseri ai",
+            "i'm asseri ai",
+            "tone set to",
+            "your tone mode is",
+            "your response mode is",
+            "you are signed in as",
+        )
+        if any(low.startswith(start) for start in greeting_starts):
+            return True
+        word_count = len(re.findall(r"[a-z0-9']+", low))
+        return word_count <= 10
 
     @staticmethod
     def extract_tone_command(text: str) -> str | None:
@@ -93,8 +113,7 @@ class HumanLayer:
             text = re.sub(r"\bI can't\b", "I cannot", text)
             text = re.sub(r"\bI don't\b", "I do not", text)
             text = re.sub(r"\bI'm\b", "I am", text)
-            if not text.lower().startswith("certainly"):
-                return f"Certainly. {text}"
+
             return text
 
         if tone == "direct":
@@ -108,7 +127,7 @@ class HumanLayer:
 
         if tone == "chill":
             text = base
-            if not re.match(r"^(sure|okay|alright)[\.\,]?", text.lower()):
+            if not HumanLayer._is_short_or_greeting(text) and not re.match(r"^(sure|okay|alright)[\.\,]?", text.lower()):
                 text = f"Sure. {text}"
             return text
 
@@ -120,7 +139,7 @@ class HumanLayer:
 
         # friendly
         text = base
-        if not re.match(r"^(sure|of course|happy to help)[\.\,]?", text.lower()):
+        if not HumanLayer._is_short_or_greeting(text) and not re.match(r"^(sure|of course|happy to help)[\.\,]?", text.lower()):
             text = f"Of course. {text}"
         return text
 
