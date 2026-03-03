@@ -157,14 +157,15 @@ class ArabicFuzzyMatcher:
 
     def normalize_math_text(self, text: str) -> str:
         out = normalize_arabic_text(text).lower()
-        out = re.sub(r"\b(ما هو|ما هي|احسب|اوجد|ايجاد|حل)\b", " ", out)
-        out = re.sub(r"\bزائد\b", " + ", out)
-        out = re.sub(r"\bناقص\b", " - ", out)
-        out = re.sub(r"\b(ضرب|×|x)\b", " * ", out)
-        out = re.sub(r"\b(قسمة|مقسوم على|على)\b", " / ", out)
-        out = re.sub(r"\bاس\b", " ^ ", out)
-        out = re.sub(r"\bجذر\s+(-?\d+(?:\.\d+)?)", r"sqrt(\1)", out)
+        out = re.sub(r"\b(\u0645\u0627 \u0647\u0648|\u0645\u0627 \u0647\u064a|\u0627\u062d\u0633\u0628|\u0627\u0648\u062c\u062f|\u0627\u064a\u062c\u0627\u062f|\u062d\u0644)\b", " ", out)
+        out = re.sub(r"\b(\u0632\u0627\u0626\u062f|\u0632\u0627\u064a\u062f)\b", " + ", out)
+        out = re.sub(r"\b\u0646\u0627\u0642\u0635\b", " - ", out)
+        out = re.sub(r"\b(\u0636\u0631\u0628|\u00d7|x)\b", " * ", out)
+        out = re.sub(r"\b(\u0642\u0633\u0645\u0629|\u0645\u0642\u0633\u0648\u0645 \u0639\u0644\u0649|\u0639\u0644\u0649)\b", " / ", out)
+        out = re.sub(r"\b\u0627\u0633\b", " ^ ", out)
+        out = re.sub(r"\b\u062c\u0630\u0631\s+(-?\d+(?:\.\d+)?)", r"sqrt(\1)", out)
         out = re.sub(r"\s+", " ", out).strip()
+        out = out.replace("+ +", "+").replace("- -", "-")
         return out
 
     def bridge_to_internal_query(self, text: str) -> str:

@@ -153,6 +153,13 @@ class HumanLayer:
             "hurt myself",
             "end my life",
             "want to die",
+            "\u0627\u0642\u062a\u0644 \u0646\u0641\u0633\u064a",
+            "\u0627\u0646\u062a\u062d\u0627\u0631",
+            "\u0627\u0624\u0630\u064a \u0646\u0641\u0633\u064a",
+            "\u0627\u0630\u064a \u0646\u0641\u0633\u064a",
+            "\u0627\u0645\u0648\u062a",
+            "\u0623\u0645\u0648\u062a",
+            "\u0627\u0646\u0647\u064a \u062d\u064a\u0627\u062a\u064a",
         ]
         if any(p in q for p in self_harm):
             return {
@@ -180,6 +187,12 @@ class HumanLayer:
             "malware",
             "ransomware",
             "carding",
+            "\u0627\u0635\u0646\u0639 \u0642\u0646\u0628\u0644\u0629",
+            "\u0627\u0635\u0646\u0639 \u0645\u062a\u0641\u062c\u0631\u0627\u062a",
+            "\u0627\u062e\u062a\u0631\u0642 \u062d\u0633\u0627\u0628",
+            "\u0633\u0631\u0642\u0629 \u0643\u0644\u0645\u0629 \u0627\u0644\u0645\u0631\u0648\u0631",
+            "\u0628\u0631\u0645\u062c\u064a\u0629 \u062e\u0628\u064a\u062b\u0629",
+            "\u0641\u064a\u0631\u0648\u0633 \u0641\u062f\u064a\u0629",
         ]
         if any(p in q for p in illegal):
             return {
@@ -200,6 +213,10 @@ class HumanLayer:
             "how to kill someone",
             "how to hurt people",
             "weapon to attack",
+            "\u0643\u064a\u0641 \u0627\u0633\u0645\u0645",
+            "\u0643\u064a\u0641 \u0627\u0642\u062a\u0644 \u0634\u062e\u0635",
+            "\u0643\u064a\u0641 \u0627\u0624\u0630\u064a \u0627\u0644\u0646\u0627\u0633",
+            "\u0633\u0644\u0627\u062d \u0644\u0644\u0647\u062c\u0648\u0645",
         ]
         if any(p in q for p in abuse):
             return {
@@ -230,4 +247,3 @@ class HumanLayer:
         if topic_clean in {"who am i", "my name", "general"} and len(ans.split()) > 20:
             return False, "Personal/meta topics require concise validated answers."
         return True, "Learning guard passed."
-
