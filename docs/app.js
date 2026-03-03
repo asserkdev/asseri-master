@@ -118,6 +118,9 @@ const ui = {
   toggleConfidence: document.getElementById("toggleConfidence"),
   toggleCompact: document.getElementById("toggleCompact"),
   toggleAutoscroll: document.getElementById("toggleAutoscroll"),
+  sidebar: document.getElementById("sidebar"),
+  mobileMenuBtn: document.getElementById("mobileMenuBtn"),
+  mobileSidebarBackdrop: document.getElementById("mobileSidebarBackdrop"),
 };
 ui.chatSendBtn = ui.chatForm ? ui.chatForm.querySelector("button[type='submit']") : null;
 
@@ -136,6 +139,22 @@ function setSafetyBadge(active) {
 
 function setLoading(flag) {
   ui.loadingRow.classList.toggle("hidden", !flag);
+}
+
+function isMobileViewport() {
+  return window.matchMedia("(max-width: 900px)").matches;
+}
+
+function setMobileSidebarOpen(open) {
+  const active = Boolean(open) && isMobileViewport();
+  document.body.classList.toggle("mobile-sidebar-open", active);
+  if (ui.mobileMenuBtn) {
+    ui.mobileMenuBtn.setAttribute("aria-expanded", active ? "true" : "false");
+  }
+}
+
+function closeMobileSidebar() {
+  setMobileSidebarOpen(false);
 }
 
 function setStoredAuth(token, userId) {
@@ -323,6 +342,7 @@ function setAuthUI(isSignedIn) {
     ui.authPassword.disabled = true;
     setChatEnabled(true);
     setSafetyBadge(false);
+  closeMobileSidebar();
   } else {
     ui.authState.textContent = "Signed out";
     ui.authBadge.textContent = "Signed out";
@@ -332,6 +352,7 @@ function setAuthUI(isSignedIn) {
     ui.authPassword.disabled = false;
     setChatEnabled(false);
     setSafetyBadge(false);
+  closeMobileSidebar();
   }
   syncProfileCard();
   loadUiPrefs();
@@ -729,7 +750,10 @@ function renderSessions() {
     if (session.session_id === state.sessionId) {
       btn.classList.add("active");
     }
-    btn.addEventListener("click", () => loadSession(session.session_id));
+    btn.addEventListener("click", () => {
+      closeMobileSidebar();
+      loadSession(session.session_id);
+    });
 
     const delBtn = document.createElement("button");
     delBtn.className = "session-delete";
@@ -755,6 +779,7 @@ function resetChatState() {
   state.sessionTags = [];
   state.sessionPins = [];
   setSafetyBadge(false);
+  closeMobileSidebar();
   ui.chatTitle.textContent = "Session";
   clearMessages();
   renderSessions();
@@ -844,6 +869,7 @@ async function loadSession(sessionId) {
   state.sessionTags = Array.isArray(payload.tags) ? payload.tags : [];
   state.sessionPins = Array.isArray(payload.pins) ? payload.pins : [];
   setSafetyBadge(false);
+  closeMobileSidebar();
   clearMessages();
   for (let idx = 0; idx < (payload.history || []).length; idx += 1) {
     const msg = payload.history[idx];
@@ -1352,6 +1378,7 @@ ui.signOutBtn.addEventListener("click", async () => {
 });
 
 ui.newSessionBtn.addEventListener("click", () => {
+  closeMobileSidebar();
   if (!state.authToken) {
     renderMessage("assistant", "Please sign in first.");
     return;
@@ -1476,6 +1503,24 @@ if (ui.searchBtn && ui.searchInput) {
   });
 }
 
+if (ui.mobileMenuBtn) {
+  ui.mobileMenuBtn.addEventListener("click", () => {
+    const next = !document.body.classList.contains("mobile-sidebar-open");
+    setMobileSidebarOpen(next);
+  });
+}
+
+if (ui.mobileSidebarBackdrop) {
+  ui.mobileSidebarBackdrop.addEventListener("click", () => {
+    closeMobileSidebar();
+  });
+}
+
+window.addEventListener("resize", () => {
+  if (!isMobileViewport()) {
+    closeMobileSidebar();
+  }
+});
 ui.messageInput.addEventListener("input", () => {
   saveDraft();
 });
@@ -1526,6 +1571,7 @@ async function boot() {
   applyUiPrefs();
   setProfileDetailsOpen(false);
   setSafetyBadge(false);
+  closeMobileSidebar();
 
   if (!API_BASE && (window.location.hostname.endsWith("github.io") || window.location.pathname.startsWith("/docs"))) {
     renderMessage(
@@ -1567,3 +1613,11 @@ async function boot() {
 }
 
 boot();
+
+
+
+
+
+
+
+

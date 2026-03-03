@@ -1075,3 +1075,173 @@ body.hide-confidence .confidence-wrap {
     max-height: 20vh;
   }
 }
+
+/* Mobile drawer layout fix (2026-03-04) */
+.mobile-menu-btn,
+.mobile-sidebar-backdrop {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  body {
+    overflow: hidden;
+  }
+
+  .app {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr);
+    height: 100dvh;
+    min-height: 100dvh;
+    padding: 8px;
+    gap: 0;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .chat-shell {
+    order: initial;
+    height: 100%;
+    min-height: 0;
+    border-radius: 14px;
+    width: 100%;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 90;
+    width: min(88vw, 360px);
+    height: 100dvh;
+    max-height: 100dvh;
+    border-radius: 0 16px 16px 0;
+    transform: translateX(-108%);
+    transition: transform 0.22s ease;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    box-shadow: 0 14px 40px rgba(12, 28, 47, 0.32);
+  }
+
+  body.mobile-sidebar-open .sidebar {
+    transform: translateX(0);
+  }
+
+  .mobile-sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 80;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    background: rgba(8, 22, 40, 0.42);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+
+  body.mobile-sidebar-open .mobile-sidebar-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .mobile-menu-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    min-width: 52px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #ffffff;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+  }
+
+  .chat-header {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .chat-header h2 {
+    grid-column: 2;
+    align-self: center;
+  }
+
+  .chat-header-meta {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  #statusText {
+    display: none;
+  }
+
+  .panel {
+    padding: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .app {
+    padding: 6px;
+  }
+
+  .chat-header,
+  .chat-tools,
+  .messages,
+  .composer {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .composer {
+    grid-template-columns: 1fr;
+  }
+
+  .composer .btn {
+    width: 100%;
+  }
+
+  .auth-badge,
+  .safety-badge {
+    font-size: 0.69rem;
+    padding: 3px 8px;
+  }
+}
+
+@media (max-width: 420px) {
+  .app {
+    padding: 4px;
+  }
+
+  .sidebar {
+    width: min(92vw, 360px);
+    padding: 10px;
+  }
+
+  .chat-header,
+  .chat-tools,
+  .messages,
+  .composer {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .chat-header h2 {
+    font-size: 0.93rem;
+  }
+
+  .brand-mark img {
+    max-height: 56px;
+  }
+}

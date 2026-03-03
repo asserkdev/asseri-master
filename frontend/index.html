@@ -15,7 +15,7 @@
 
 <body>
   <div class="app">
-    <aside class="sidebar">
+    <aside id="sidebar" class="sidebar">
       <div class="brand">
         <div class="brand-mark">
           <img id="brandLogo" src="./logo.svg" alt="Asseri AI logo" />
@@ -104,9 +104,11 @@
         </div>
       </details>
     </aside>
+    <button id="mobileSidebarBackdrop" class="mobile-sidebar-backdrop" type="button" aria-label="Close menu"></button>
 
     <main class="chat-shell">
       <header class="chat-header">
+        <button id="mobileMenuBtn" class="mobile-menu-btn" type="button" aria-label="Open menu" aria-expanded="false">Menu</button>
         <h2 id="chatTitle">Session</h2>
         <div class="chat-header-meta">
           <span id="authBadge" class="auth-badge">Signed out</span>
@@ -157,3 +159,7 @@
 </body>
 
 </html>
+
+
+
+
