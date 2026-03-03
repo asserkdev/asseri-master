@@ -46,3 +46,5 @@ node_modules/
 .idea/
 Thumbs.db
 .DS_Store
+backend/data/full_smoke_report.json
+

@@ -1,6 +1,6 @@
-﻿---
+---
 title: Asseri AI
-emoji: "🤖"
+emoji: "ðŸ¤–"
 colorFrom: blue
 colorTo: indigo
 sdk: docker
@@ -123,10 +123,12 @@ Environment variable overrides still work, for example:
 - `bash scripts/train_model.sh`
 - `bash scripts/build_native.sh`
 - `bash scripts/run_quality_eval.sh`
+- `bash scripts/run_full_smoke.sh`
 
 Quality benchmark output is written to:
 
 - `backend/data/quality_report.json`
+- `backend/data/full_smoke_report.json`
 
 ## API Endpoints
 
@@ -205,4 +207,5 @@ git push hf main
 Notes:
 - Space runs on port `7860` automatically via `Dockerfile`.
 - This app serves frontend + backend from the same host in Spaces, so no `?api=` override is required there.
+
 
