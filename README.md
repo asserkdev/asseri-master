@@ -139,9 +139,34 @@ Quality benchmark output is written to:
 
 ## Deploy
 
-GitHub Pages serves only static frontend. Python backend must run on a host (Render/Fly/VM).
+GitHub Pages and Firebase Hosting serve only static frontend. Python backend must run on an API host (Cloud Run/Render/Fly/VM).
 
-- Pages URL: `http://asserkdev.github.io/asseri-master/`
-- Backend URL: `https://asseri--asserkdev.replit.app`
-- Default behavior: when opened from the Pages URL above, the app auto-connects to the Replit backend.
+- GitHub Pages URL: `https://asserkdev.github.io/asseri-master/`
+- Firebase Hosting URL: `https://asseri-1.web.app`
+- Current backend URL: `https://asseri--asserkdev.replit.app`
 - Optional override: pass `?api=<custom-backend-url>` in the query string.
+
+### Firebase Hosting (Configured)
+
+Project:
+- Project ID: `asseri-1`
+- Site: `asseri-1`
+
+Files added:
+- `.firebaserc`
+- `firebase.json`
+- `frontend/firebase-init.js`
+- `docs/firebase-init.js`
+
+Deploy commands:
+
+```bash
+npm install -g firebase-tools
+firebase login
+firebase use asseri-1
+firebase deploy --only hosting
+```
+
+If you move backend from Replit to Cloud Run, set your API URL in:
+- `frontend/firebase-init.js` -> `firebaseApiBase`
+- `docs/firebase-init.js` -> `firebaseApiBase`

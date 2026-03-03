@@ -1,13 +1,16 @@
 function resolveApiBase() {
-  const defaultCloudApi = "https://asseri--asserkdev.replit.app";
+  const defaultLegacyApi = "https://asseri--asserkdev.replit.app";
   const isGitHubPages =
     window.location.hostname === "asserkdev.github.io" &&
     window.location.pathname.toLowerCase().includes("/asseri-master");
+  const isFirebaseHosting =
+    window.location.hostname.endsWith(".web.app") || window.location.hostname.endsWith(".firebaseapp.com");
   const params = new URLSearchParams(window.location.search);
   const fromQuery = (params.get("api") || "").trim();
   const fromStorage = (localStorage.getItem("asseri_api_base") || "").trim();
   const fromWindow = (window.APP_API_BASE || "").trim();
-  const fromDefault = isGitHubPages ? defaultCloudApi : "";
+  const fromFirebase = (window.ASSERI_FIREBASE_API_BASE || "").trim();
+  const fromDefault = isFirebaseHosting ? fromFirebase : isGitHubPages ? defaultLegacyApi : "";
   const chosen = fromQuery || fromWindow || fromDefault || fromStorage;
   if (chosen) {
     localStorage.setItem("asseri_api_base", chosen);
@@ -20,6 +23,8 @@ const AUTH_TOKEN_KEY = "asseri_auth_token";
 const AUTH_USER_KEY = "asseri_auth_user";
 const DRAFT_KEY_PREFIX = "asseri_draft_";
 const TONE_MODE_KEY = "asseri_tone_mode";
+const UI_PREFS_KEY_PREFIX = "asseri_ui_prefs_";
+const PROFILE_STORE_KEY_PREFIX = "asseri_profile_";
 
 function apiUrl(path) {
   if (/^https?:\/\//i.test(path)) {
@@ -61,9 +66,19 @@ const state = {
   sessionPins: [],
   toneMode: "friendly",
   safetyActive: false,
+  uiPrefs: {
+    showConfidence: true,
+    compactMessages: false,
+    autoScroll: true,
+  },
+  profileData: {
+    email: "",
+    notes: "",
+  },
 };
 
 const ui = {
+  brandLogo: document.getElementById("brandLogo"),
   sessionsList: document.getElementById("sessionsList"),
   messages: document.getElementById("messages"),
   chatForm: document.getElementById("chatForm"),
@@ -91,6 +106,17 @@ const ui = {
   tagsBtn: document.getElementById("tagsBtn"),
   searchInput: document.getElementById("searchInput"),
   searchBtn: document.getElementById("searchBtn"),
+  profileCard: document.getElementById("profileCard"),
+  profileAvatar: document.getElementById("profileAvatar"),
+  profileDisplayName: document.getElementById("profileDisplayName"),
+  profileHint: document.getElementById("profileHint"),
+  profileDetails: document.getElementById("profileDetails"),
+  profileEmail: document.getElementById("profileEmail"),
+  profileNotes: document.getElementById("profileNotes"),
+  saveProfileBtn: document.getElementById("saveProfileBtn"),
+  toggleConfidence: document.getElementById("toggleConfidence"),
+  toggleCompact: document.getElementById("toggleCompact"),
+  toggleAutoscroll: document.getElementById("toggleAutoscroll"),
 };
 ui.chatSendBtn = ui.chatForm ? ui.chatForm.querySelector("button[type='submit']") : null;
 
@@ -130,6 +156,124 @@ function setStoredToneMode(tone) {
     return;
   }
   localStorage.setItem(TONE_MODE_KEY, tone);
+}
+
+function currentProfileKey() {
+  return String(state.userId || "guest").trim().toLowerCase() || "guest";
+}
+
+function uiPrefsKey() {
+  return `${UI_PREFS_KEY_PREFIX}${currentProfileKey()}`;
+}
+
+function profileStoreKey() {
+  return `${PROFILE_STORE_KEY_PREFIX}${currentProfileKey()}`;
+}
+
+function parseJsonSafe(raw, fallback) {
+  try {
+    return JSON.parse(raw);
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function clampBool(value, fallback = false) {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  return fallback;
+}
+
+function loadUiPrefs() {
+  const raw = localStorage.getItem(uiPrefsKey());
+  const payload = raw ? parseJsonSafe(raw, {}) : {};
+  state.uiPrefs = {
+    showConfidence: clampBool(payload.showConfidence, true),
+    compactMessages: clampBool(payload.compactMessages, false),
+    autoScroll: clampBool(payload.autoScroll, true),
+  };
+}
+
+function saveUiPrefs() {
+  localStorage.setItem(uiPrefsKey(), JSON.stringify(state.uiPrefs));
+}
+
+function applyUiPrefs() {
+  document.body.classList.toggle("compact-mode", Boolean(state.uiPrefs.compactMessages));
+  document.body.classList.toggle("hide-confidence", !state.uiPrefs.showConfidence);
+  if (ui.toggleConfidence) ui.toggleConfidence.checked = state.uiPrefs.showConfidence;
+  if (ui.toggleCompact) ui.toggleCompact.checked = state.uiPrefs.compactMessages;
+  if (ui.toggleAutoscroll) ui.toggleAutoscroll.checked = state.uiPrefs.autoScroll;
+}
+
+function loadProfileData() {
+  const raw = localStorage.getItem(profileStoreKey());
+  const payload = raw ? parseJsonSafe(raw, {}) : {};
+  state.profileData = {
+    email: typeof payload.email === "string" ? payload.email : "",
+    notes: typeof payload.notes === "string" ? payload.notes : "",
+  };
+  if (ui.profileEmail) ui.profileEmail.value = state.profileData.email;
+  if (ui.profileNotes) ui.profileNotes.value = state.profileData.notes;
+}
+
+function saveProfileData() {
+  state.profileData = {
+    email: ui.profileEmail ? String(ui.profileEmail.value || "").trim() : "",
+    notes: ui.profileNotes ? String(ui.profileNotes.value || "").trim() : "",
+  };
+  localStorage.setItem(profileStoreKey(), JSON.stringify(state.profileData));
+  setStatus("Profile notes saved.");
+}
+
+function syncProfileCard() {
+  const name = state.userId || "Guest";
+  const initials = name
+    .replace(/[^a-z0-9]+/gi, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0].toUpperCase())
+    .join("") || "G";
+  if (ui.profileAvatar) ui.profileAvatar.textContent = initials;
+  if (ui.profileDisplayName) ui.profileDisplayName.textContent = name;
+  if (ui.profileHint) {
+    ui.profileHint.textContent = state.authToken ? "Signed in profile" : "Guest profile (local)";
+  }
+}
+
+function setProfileDetailsOpen(open) {
+  if (!ui.profileDetails) {
+    return;
+  }
+  ui.profileDetails.classList.toggle("hidden", !open);
+  if (ui.profileCard) {
+    ui.profileCard.classList.toggle("open", open);
+  }
+}
+
+function initLogoFallback() {
+  if (!ui.brandLogo) {
+    return;
+  }
+  const candidates = [
+    "./logo.png",
+    "logo.png",
+    "../logo.png",
+    "/logo.png",
+    "/asseri-master/logo.png",
+    "/asseri-master/docs/logo.png",
+    "/asseri-master/frontend/logo.png",
+  ];
+  let index = 0;
+  ui.brandLogo.addEventListener("error", () => {
+    index += 1;
+    if (index < candidates.length) {
+      ui.brandLogo.src = candidates[index];
+    }
+  });
 }
 
 function authHeaders(extra = {}) {
@@ -181,6 +325,10 @@ function setAuthUI(isSignedIn) {
     setChatEnabled(false);
     setSafetyBadge(false);
   }
+  syncProfileCard();
+  loadUiPrefs();
+  loadProfileData();
+  applyUiPrefs();
 }
 
 function syncToneUI() {
@@ -350,7 +498,7 @@ function renderMessage(role, text, references = [], meta = null) {
   el.appendChild(body);
 
   if (meta && typeof meta === "object") {
-    if (role === "assistant" && typeof meta.confidence === "number") {
+    if (role === "assistant" && typeof meta.confidence === "number" && state.uiPrefs.showConfidence) {
       const confidenceWrap = document.createElement("div");
       confidenceWrap.className = "confidence-wrap";
       confidenceWrap.title = `${meta.confidence}% confidence`;
@@ -500,7 +648,9 @@ function renderMessage(role, text, references = [], meta = null) {
   }
 
   ui.messages.appendChild(el);
-  ui.messages.scrollTop = ui.messages.scrollHeight;
+  if (state.uiPrefs.autoScroll) {
+    ui.messages.scrollTop = ui.messages.scrollHeight;
+  }
 }
 
 function normalizeUserMessage(raw) {
@@ -1243,6 +1393,43 @@ if (ui.applyToneBtn) {
   });
 }
 
+if (ui.profileCard) {
+  ui.profileCard.addEventListener("click", () => {
+    const isOpen = !ui.profileDetails || ui.profileDetails.classList.contains("hidden");
+    setProfileDetailsOpen(isOpen);
+  });
+}
+
+if (ui.saveProfileBtn) {
+  ui.saveProfileBtn.addEventListener("click", () => {
+    saveProfileData();
+  });
+}
+
+if (ui.toggleConfidence) {
+  ui.toggleConfidence.addEventListener("change", () => {
+    state.uiPrefs.showConfidence = Boolean(ui.toggleConfidence.checked);
+    saveUiPrefs();
+    applyUiPrefs();
+  });
+}
+
+if (ui.toggleCompact) {
+  ui.toggleCompact.addEventListener("change", () => {
+    state.uiPrefs.compactMessages = Boolean(ui.toggleCompact.checked);
+    saveUiPrefs();
+    applyUiPrefs();
+  });
+}
+
+if (ui.toggleAutoscroll) {
+  ui.toggleAutoscroll.addEventListener("change", () => {
+    state.uiPrefs.autoScroll = Boolean(ui.toggleAutoscroll.checked);
+    saveUiPrefs();
+    applyUiPrefs();
+  });
+}
+
 if (ui.searchBtn && ui.searchInput) {
   ui.searchBtn.addEventListener("click", async () => {
     await searchInSession(ui.searchInput.value);
@@ -1294,12 +1481,18 @@ ui.chatForm.addEventListener("submit", async (event) => {
 
 async function boot() {
   setStatus("Loading...");
+  initLogoFallback();
   localStorage.removeItem("asseri_user_id");
   state.toneMode = (localStorage.getItem(TONE_MODE_KEY) || "friendly").toLowerCase();
   if (!["formal", "friendly", "casual", "chill", "direct"].includes(state.toneMode)) {
     state.toneMode = "friendly";
   }
   syncToneUI();
+  syncProfileCard();
+  loadUiPrefs();
+  loadProfileData();
+  applyUiPrefs();
+  setProfileDetailsOpen(false);
   setSafetyBadge(false);
 
   if (!API_BASE && (window.location.hostname.endsWith("github.io") || window.location.pathname.startsWith("/docs"))) {
