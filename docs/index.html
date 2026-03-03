@@ -22,7 +22,7 @@
         </div>
       </div>
 
-      <details class="panel collapsible-panel profile-panel" open>
+      <details class="panel collapsible-panel profile-panel">
         <summary class="panel-toggle">Profile</summary>
         <div class="panel-content">
           <button id="profileCard" class="profile-card" type="button">
@@ -43,7 +43,7 @@
         </div>
       </details>
 
-      <details class="panel collapsible-panel" open>
+      <details class="panel collapsible-panel">
         <summary class="panel-toggle">Account</summary>
         <div class="panel-content">
           <p id="authState" class="auth-state">Signed out</p>
@@ -97,7 +97,7 @@
           </div>
         </div>
       </details>
-      <details class="panel collapsible-panel" open>
+      <details class="panel collapsible-panel">
         <summary class="panel-toggle">Sessions</summary>
         <div class="panel-content">
           <ul id="sessionsList" class="sessions-list"></ul>
@@ -116,19 +116,24 @@
       </header>
 
       <section class="chat-tools">
-        <div class="tool-group">
-          <button id="continueBtn" class="btn" type="button">Continue</button>
-          <button id="regenerateBtn" class="btn" type="button">Regenerate</button>
-          <button id="exportBtn" class="btn" type="button">Export</button>
-          <button id="deleteSessionBtn" class="btn danger" type="button">Delete Chat</button>
-        </div>
-        <div class="tool-group">
-          <button id="profileBtn" class="btn" type="button">Profile Facts</button>
-          <button id="pinsBtn" class="btn" type="button">Pins</button>
-          <button id="tagsBtn" class="btn" type="button">Tags</button>
-          <input id="searchInput" type="text" placeholder="Search this chat..." />
-          <button id="searchBtn" class="btn" type="button">Search</button>
-        </div>
+        <details class="more-menu">
+          <summary class="more-toggle">More :</summary>
+          <div class="more-content">
+            <div class="more-grid">
+              <button id="continueBtn" class="btn" type="button">Continue</button>
+              <button id="regenerateBtn" class="btn" type="button">Regenerate</button>
+              <button id="exportBtn" class="btn" type="button">Export</button>
+              <button id="deleteSessionBtn" class="btn danger" type="button">Delete Chat</button>
+              <button id="profileBtn" class="btn" type="button">Profile Facts</button>
+              <button id="pinsBtn" class="btn" type="button">Pins</button>
+              <button id="tagsBtn" class="btn" type="button">Tags</button>
+            </div>
+            <div class="more-search">
+              <input id="searchInput" type="text" placeholder="Search this chat..." />
+              <button id="searchBtn" class="btn" type="button">Search</button>
+            </div>
+          </div>
+        </details>
       </section>
 
       <section id="messages" class="messages"></section>
