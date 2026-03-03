@@ -1,4 +1,13 @@
-﻿# Asseri Modular AI System
+﻿---
+title: Asseri AI
+emoji: robot
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+# Asseri Modular AI System
 
 Clean modular AI architecture with separate frontend/backend and optional acceleration layers.
 
@@ -196,3 +205,5 @@ git push hf main
 Notes:
 - Space runs on port `7860` automatically via `Dockerfile`.
 - This app serves frontend + backend from the same host in Spaces, so no `?api=` override is required there.
+
+
