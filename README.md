@@ -1,6 +1,6 @@
 ﻿---
 title: Asseri AI
-emoji: robot
+emoji: "🤖"
 colorFrom: blue
 colorTo: indigo
 sdk: docker
@@ -205,5 +205,4 @@ git push hf main
 Notes:
 - Space runs on port `7860` automatically via `Dockerfile`.
 - This app serves frontend + backend from the same host in Spaces, so no `?api=` override is required there.
-
 
