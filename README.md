@@ -1,6 +1,6 @@
 ---
 title: Asseri AI
-emoji: "ðŸ¤–"
+emoji: "☀️"
 colorFrom: blue
 colorTo: indigo
 sdk: docker
