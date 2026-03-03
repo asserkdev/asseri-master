@@ -689,10 +689,20 @@ async function applyToneMode(mode) {
   setStoredToneMode(tone);
   syncToneUI();
   if (!state.authToken) {
-    setStatus(`Tone set to ${tone} locally. Sign in to apply server-side.`);
+    setStatus(`Tone set to ${tone} locally.`);
     return;
   }
-  await sendChatMessage(`set tone to ${tone}`);
+  setStatus("Applying tone...");
+  try {
+    await api.json("/api/preferences/tone", {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ tone }),
+    });
+    setStatus(`Tone set to ${tone}.`);
+  } catch (error) {
+    setStatus(`Tone saved locally, server apply failed: ${error.message}`);
+  }
 }
 
 function renderSessions() {
@@ -1262,7 +1272,7 @@ async function handleSlashCommand(rawText) {
   if (cmd === "tone") {
     const tone = (parts[0] || "").toLowerCase().trim();
     if (!tone) {
-      await sendChatMessage("what is my tone mode");
+      renderMessage("assistant", `Current tone mode: ${state.toneMode}.`, [], { timestamp: new Date().toISOString() });
       return true;
     }
     await applyToneMode(tone);

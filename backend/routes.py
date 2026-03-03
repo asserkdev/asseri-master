@@ -38,6 +38,10 @@ class TagsRequest(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class TonePreferenceRequest(BaseModel):
+    tone: str = Field(min_length=3, max_length=16)
+
+
 class PinRequest(BaseModel):
     message_index: int = Field(ge=0)
     note: str | None = Field(default=None, max_length=240)
@@ -349,6 +353,24 @@ def user_profile(request: Request) -> dict[str, Any]:
     memory: MemoryStore = request.app.state.memory
     resolved = _require_user_id(request)
     return {"user_id": resolved, "profile": memory.user_profile(user_id=resolved)}
+
+
+@api_router.post("/preferences/tone")
+def set_tone_preference(payload: TonePreferenceRequest, request: Request) -> dict[str, Any]:
+    memory: MemoryStore = request.app.state.memory
+    resolved = _require_user_id(request)
+    tone = str(payload.tone or "").strip().lower()
+    allowed = {"formal", "friendly", "casual", "chill", "direct"}
+    if tone not in allowed:
+        raise HTTPException(status_code=400, detail="Tone must be one of: formal, friendly, casual, chill, direct.")
+    memory.remember_user_fact(
+        "tone_mode",
+        tone,
+        confidence=0.98,
+        source="ui_preference",
+        user_id=resolved,
+    )
+    return {"ok": True, "user_id": resolved, "tone": tone}
 
 
 @api_router.get("/chat/suggestions")
