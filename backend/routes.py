@@ -137,6 +137,22 @@ def _last_substantive_user_message(memory: MemoryStore, session_id: str, user_id
 def _safe_chat(ai: AICore, memory: MemoryStore, message: str, session_id: str | None, user_id: str) -> ChatResponse:
     try:
         result = ai.handle_message(message, session_id, user_id=user_id)
+        safe_session = str(result.get("session_id") or memory.ensure_session(session_id, user_id=user_id))
+        refs_raw = result.get("references")
+        refs = refs_raw if isinstance(refs_raw, list) else []
+        conf_raw = result.get("confidence")
+        conf = int(conf_raw) if isinstance(conf_raw, (int, float)) else None
+        intent = str(result.get("intent", "")).strip() or None
+        topic = str(result.get("topic", "")).strip() or None
+        memory.annotate_last_assistant_message(
+            safe_session,
+            user_id=user_id,
+            references=refs,
+            confidence=conf,
+            intent=intent,
+            topic=topic,
+        )
+        result["session_id"] = safe_session
         result["user_id"] = user_id
         return ChatResponse(**result)
     except Exception as exc:
@@ -159,7 +175,16 @@ def _safe_chat(ai: AICore, memory: MemoryStore, message: str, session_id: str | 
             "topic": "error",
             "related_concepts": [],
         }
-        memory.append_message(safe_session, "assistant", fallback["answer"], user_id=user_id)
+        memory.append_message(
+            safe_session,
+            "assistant",
+            fallback["answer"],
+            user_id=user_id,
+            references=fallback["references"],
+            confidence=int(fallback["confidence"]),
+            intent=str(fallback["intent"]),
+            topic=str(fallback["topic"]),
+        )
         return ChatResponse(**fallback)
 
 

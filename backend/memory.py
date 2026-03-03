@@ -243,6 +243,23 @@ class MemoryStore:
                 payload.setdefault("pinned_messages", [])
         return sid
 
+    @staticmethod
+    def _clean_references(references: list[dict[str, str]] | None) -> list[dict[str, str]]:
+        if not isinstance(references, list):
+            return []
+        out: list[dict[str, str]] = []
+        for item in references:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip()
+            url = str(item.get("url", "")).strip()
+            if not url:
+                continue
+            out.append({"title": title or url, "url": url})
+            if len(out) >= 24:
+                break
+        return out
+
     def ensure_session(self, session_id: str | None = None, user_id: str | None = None) -> str:
         with self.lock:
             sid = self._ensure_session_no_lock(session_id=session_id, user_id=user_id)
@@ -350,7 +367,17 @@ class MemoryStore:
             self._save()
             return True
 
-    def append_message(self, session_id: str, role: str, content: str, user_id: str | None = None) -> None:
+    def append_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        user_id: str | None = None,
+        references: list[dict[str, str]] | None = None,
+        confidence: int | None = None,
+        intent: str | None = None,
+        topic: str | None = None,
+    ) -> None:
         with self.lock:
             state = self._state_no_lock(user_id)
             sid = self._ensure_session_no_lock(session_id=session_id, user_id=user_id)
@@ -361,11 +388,64 @@ class MemoryStore:
                 "timestamp": now_iso(),
                 "tags": self._topic_tags(content),
             }
+            refs = self._clean_references(references)
+            if refs:
+                message["references"] = refs
+            if isinstance(confidence, int):
+                message["confidence"] = max(0, min(100, int(confidence)))
+            if intent:
+                message["intent"] = str(intent).strip()[:64]
+            if topic:
+                message["topic"] = str(topic).strip()[:120]
             session["messages"].append(message)
             session["updated_at"] = now_iso()
             if len(session["messages"]) == 1 and role == "user":
                 session["title"] = self._auto_title_from_text(content)
             self._save()
+
+    def annotate_last_assistant_message(
+        self,
+        session_id: str,
+        user_id: str | None = None,
+        references: list[dict[str, str]] | None = None,
+        confidence: int | None = None,
+        intent: str | None = None,
+        topic: str | None = None,
+    ) -> bool:
+        with self.lock:
+            state = self._state_no_lock(user_id)
+            payload = state["sessions"].get(session_id, {})
+            if not isinstance(payload, dict):
+                return False
+            messages = payload.get("messages", [])
+            if not isinstance(messages, list) or not messages:
+                return False
+
+            refs = self._clean_references(references)
+            changed = False
+            for idx in range(len(messages) - 1, -1, -1):
+                row = messages[idx]
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("role", "")).lower() != "assistant":
+                    continue
+                if refs:
+                    row["references"] = refs
+                    changed = True
+                if isinstance(confidence, int):
+                    row["confidence"] = max(0, min(100, int(confidence)))
+                    changed = True
+                if intent:
+                    row["intent"] = str(intent).strip()[:64]
+                    changed = True
+                if topic:
+                    row["topic"] = str(topic).strip()[:120]
+                    changed = True
+                if changed:
+                    payload["updated_at"] = now_iso()
+                    self._save()
+                return changed
+            return False
 
     def set_session_title(self, session_id: str, title: str, user_id: str | None = None) -> str:
         clean = re.sub(r"\s+", " ", str(title or "").strip())

@@ -830,13 +830,18 @@ async function loadSession(sessionId) {
   for (let idx = 0; idx < (payload.history || []).length; idx += 1) {
     const msg = payload.history[idx];
     const role = msg.role === "user" ? "user" : "assistant";
+    const storedConfidence =
+      role === "assistant" && typeof msg.confidence === "number"
+        ? Math.max(0, Math.min(100, Number(msg.confidence)))
+        : null;
     const meta = {
-      confidence: role === "assistant" ? extractConfidenceFromText(msg.content || "") : null,
+      confidence: role === "assistant" ? (storedConfidence !== null ? storedConfidence : extractConfidenceFromText(msg.content || "")) : null,
       timestamp: msg.timestamp || "",
-      topic: null,
+      topic: role === "assistant" ? (msg.topic || null) : null,
       messageIndex: idx,
     };
-    renderMessage(role, msg.content || "", [], meta);
+    const refs = role === "assistant" && Array.isArray(msg.references) ? msg.references : [];
+    renderMessage(role, msg.content || "", refs, meta);
     if (role === "assistant" && isLikelySafetyMessage(msg.content || "")) {
       setSafetyBadge(true);
     }
