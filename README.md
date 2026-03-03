@@ -170,3 +170,29 @@ firebase deploy --only hosting
 If you move backend from Replit to Cloud Run, set your API URL in:
 - `frontend/firebase-init.js` -> `firebaseApiBase`
 - `docs/firebase-init.js` -> `firebaseApiBase`
+
+### Hugging Face Spaces (No Card Path)
+
+This repo now includes:
+- `Dockerfile`
+- `.dockerignore`
+
+Steps:
+1. In Hugging Face, create a new **Space** with SDK = **Docker**.
+2. In terminal, authenticate:
+
+```bash
+pip install -U huggingface_hub
+huggingface-cli login
+```
+
+3. Add Space git remote and push:
+
+```bash
+git remote add hf https://huggingface.co/spaces/<YOUR_USERNAME>/<YOUR_SPACE_NAME>
+git push hf main
+```
+
+Notes:
+- Space runs on port `7860` automatically via `Dockerfile`.
+- This app serves frontend + backend from the same host in Spaces, so no `?api=` override is required there.
