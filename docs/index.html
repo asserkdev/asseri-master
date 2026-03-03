@@ -22,87 +22,87 @@
         </div>
       </div>
 
-      <section class="panel profile-panel">
-        <h2>Profile</h2>
-        <button id="profileCard" class="profile-card" type="button">
-          <span id="profileAvatar" class="profile-avatar">G</span>
-          <span class="profile-main">
-            <strong id="profileDisplayName">Guest</strong>
-            <span id="profileHint">Click to open profile details</span>
-          </span>
-          <span class="profile-caret">v</span>
-        </button>
-        <div id="profileDetails" class="profile-details hidden">
-          <label for="profileEmail">Email</label>
-          <input id="profileEmail" type="email" placeholder="name@example.com" />
-          <label for="profileNotes">Notes</label>
-          <textarea id="profileNotes" rows="3" placeholder="Add notes about this user profile..."></textarea>
-          <button id="saveProfileBtn" class="btn" type="button">Save Profile Notes</button>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>Account</h2>
-        <p id="authState" class="auth-state">Signed out</p>
-        <form id="authForm" class="auth-form">
-          <input id="authUsername" type="text" placeholder="Username" autocomplete="username" required />
-          <input id="authPassword" type="password" placeholder="Password" autocomplete="current-password" required />
-          <div class="auth-actions">
-            <button id="signInBtn" class="btn primary" type="submit">Sign In</button>
-            <button id="signUpBtn" class="btn" type="button">Sign Up</button>
-            <button id="signOutBtn" class="btn hidden" type="button">Sign Out</button>
+      <details class="panel collapsible-panel profile-panel" open>
+        <summary class="panel-toggle">Profile</summary>
+        <div class="panel-content">
+          <button id="profileCard" class="profile-card" type="button">
+            <span id="profileAvatar" class="profile-avatar">G</span>
+            <span class="profile-main">
+              <strong id="profileDisplayName">Guest</strong>
+              <span id="profileHint">Click to open profile details</span>
+            </span>
+            <span class="profile-caret">v</span>
+          </button>
+          <div id="profileDetails" class="profile-details hidden">
+            <label for="profileEmail">Email</label>
+            <input id="profileEmail" type="email" placeholder="name@example.com" />
+            <label for="profileNotes">Notes</label>
+            <textarea id="profileNotes" rows="3" placeholder="Add notes about this user profile..."></textarea>
+            <button id="saveProfileBtn" class="btn" type="button">Save Profile Notes</button>
           </div>
-        </form>
-      </section>
+        </div>
+      </details>
+
+      <details class="panel collapsible-panel" open>
+        <summary class="panel-toggle">Account</summary>
+        <div class="panel-content">
+          <p id="authState" class="auth-state">Signed out</p>
+          <form id="authForm" class="auth-form">
+            <input id="authUsername" type="text" placeholder="Username" autocomplete="username" required />
+            <input id="authPassword" type="password" placeholder="Password" autocomplete="current-password" required />
+            <div class="auth-actions">
+              <button id="signInBtn" class="btn primary" type="submit">Sign In</button>
+              <button id="signUpBtn" class="btn" type="button">Sign Up</button>
+              <button id="signOutBtn" class="btn hidden" type="button">Sign Out</button>
+            </div>
+          </form>
+        </div>
+      </details>
       <button id="newSessionBtn" class="btn primary">New Session</button>
 
-      <section class="panel">
-        <h2>Preferences</h2>
-        <label class="toggle-row" for="toggleConfidence">
-          <span>Confidence Bar</span>
-          <input id="toggleConfidence" type="checkbox" checked />
-          <span class="toggle-ui"></span>
-        </label>
-        <label class="toggle-row" for="toggleCompact">
-          <span>Compact Messages</span>
-          <input id="toggleCompact" type="checkbox" />
-          <span class="toggle-ui"></span>
-        </label>
-        <label class="toggle-row" for="toggleAutoscroll">
-          <span>Auto Scroll</span>
-          <input id="toggleAutoscroll" type="checkbox" checked />
-          <span class="toggle-ui"></span>
-        </label>
-      </section>
-
-      <section class="panel">
-        <h2>Style</h2>
-        <div class="tone-row">
-          <label for="toneSelect">Tone</label>
-          <select id="toneSelect">
-            <option value="friendly">Friendly</option>
-            <option value="formal">Formal</option>
-            <option value="casual">Casual</option>
-            <option value="chill">Chill</option>
-            <option value="direct">Direct</option>
-          </select>
-          <button id="applyToneBtn" class="btn" type="button">Apply Tone</button>
+      <details class="panel collapsible-panel">
+        <summary class="panel-toggle">Preferences</summary>
+        <div class="panel-content">
+          <label class="toggle-row" for="toggleConfidence">
+            <span>Confidence Bar</span>
+            <input id="toggleConfidence" type="checkbox" checked />
+            <span class="toggle-ui"></span>
+          </label>
+          <label class="toggle-row" for="toggleCompact">
+            <span>Compact Messages</span>
+            <input id="toggleCompact" type="checkbox" />
+            <span class="toggle-ui"></span>
+          </label>
+          <label class="toggle-row" for="toggleAutoscroll">
+            <span>Auto Scroll</span>
+            <input id="toggleAutoscroll" type="checkbox" checked />
+            <span class="toggle-ui"></span>
+          </label>
         </div>
-      </section>
-      <section class="panel connection-panel">
-        <h2>Connection</h2>
-        <p><strong>Web (GitHub):</strong> <a href="https://asserkdev.github.io/asseri-master/" target="_blank"
-            rel="noopener noreferrer">asserkdev.github.io/asseri-master</a></p>
-        <p><strong>Web (Firebase):</strong> <a href="https://asseri-1.web.app" target="_blank"
-            rel="noopener noreferrer">asseri-1.web.app</a></p>
-        <p><strong>API:</strong> <a href="https://asseri--asserkdev.replit.app" target="_blank"
-            rel="noopener noreferrer">asseri--asserkdev.replit.app</a></p>
-        <p class="connection-tip">Override backend with <code>?api=https://your-backend-url</code></p>
-      </section>
-      <section class="panel">
-        <h2>Sessions</h2>
-        <ul id="sessionsList" class="sessions-list"></ul>
-      </section>
+      </details>
+
+      <details class="panel collapsible-panel">
+        <summary class="panel-toggle">Tone</summary>
+        <div class="panel-content">
+          <div class="tone-row">
+            <label for="toneSelect">Tone</label>
+            <select id="toneSelect">
+              <option value="friendly">Friendly</option>
+              <option value="formal">Formal</option>
+              <option value="casual">Casual</option>
+              <option value="chill">Chill</option>
+              <option value="direct">Direct</option>
+            </select>
+            <button id="applyToneBtn" class="btn" type="button">Apply Tone</button>
+          </div>
+        </div>
+      </details>
+      <details class="panel collapsible-panel" open>
+        <summary class="panel-toggle">Sessions</summary>
+        <div class="panel-content">
+          <ul id="sessionsList" class="sessions-list"></ul>
+        </div>
+      </details>
     </aside>
 
     <main class="chat-shell">

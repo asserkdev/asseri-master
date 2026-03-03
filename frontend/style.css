@@ -132,6 +132,45 @@ body {
   color: var(--muted);
 }
 
+.collapsible-panel {
+  padding: 0;
+  overflow: hidden;
+}
+
+.panel-toggle {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 11px 12px;
+  font-size: 0.83rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid rgba(21, 46, 78, 0.08);
+}
+
+.panel-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.panel-toggle::after {
+  content: ">";
+  font-size: 0.8rem;
+  transform: rotate(90deg);
+  transition: transform 0.2s ease;
+}
+
+.collapsible-panel[open] > .panel-toggle::after {
+  transform: rotate(-90deg);
+}
+
+.panel-content {
+  padding: 10px;
+}
+
 .panel a {
   color: #1f67d5;
   text-decoration: none;
@@ -352,23 +391,6 @@ body {
 
 .toggle-row input:checked + .toggle-ui::after {
   transform: translateX(20px);
-}
-
-.connection-panel p {
-  margin: 0;
-  font-size: 0.79rem;
-  line-height: 1.45;
-  color: var(--muted);
-}
-
-.connection-panel p + p {
-  margin-top: 6px;
-}
-
-.connection-tip code {
-  font-family: "Space Grotesk", "Manrope", sans-serif;
-  font-size: 0.72rem;
-  color: #143f83;
 }
 
 .sessions-list {
