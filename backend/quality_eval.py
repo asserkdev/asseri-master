@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
@@ -84,6 +84,32 @@ def _base_cases() -> list[EvalCase]:
         EvalCase("casual_02", "casual", "what is your name", expected_intent="casual", contains_any=["asseri ai"], min_conf=70),
         EvalCase("casual_03b", "casual", "what can you do", expected_intent="casual", contains_any=["answer questions", "solve math"], min_conf=65),
         EvalCase("casual_03", "profile", "who am i", expected_intent="casual", contains_any=["signed in as"], min_conf=70),
+        EvalCase(
+            "casual_04",
+            "casual",
+            "how much confidence do you have ?",
+            expected_intent="casual",
+            contains_any=["confidence", "bar"],
+            not_contains=["boy and the heron", "wikipedia:"],
+            min_conf=65,
+        ),
+        EvalCase(
+            "casual_05",
+            "casual",
+            "where did you learn this",
+            expected_intent="casual",
+            contains_any=["internal logic", "memory", "search"],
+            not_contains=["i know what you did last summer"],
+            min_conf=65,
+        ),
+        EvalCase(
+            "casual_06",
+            "casual",
+            "sing",
+            expected_intent="casual",
+            contains_any=["cannot sing", "lyrics"],
+            min_conf=65,
+        ),
         EvalCase("pref_01", "preferences", "set tone to formal", expected_intent="feedback", contains_any=["tone set"], min_conf=75),
         EvalCase("pref_02", "preferences", "set response mode to advanced", expected_intent="feedback", contains_any=["response mode set"], min_conf=75),
         EvalCase("pref_03", "preferences", "set tone to direct", expected_intent="feedback", contains_any=["tone set"], min_conf=70),
@@ -385,6 +411,39 @@ def _flow_cases(core: AICore) -> list[dict[str, Any]]:
         ),
     )
     rows.append(c6)
+
+    # Flow 4: repeated greeting should not stay identical every turn.
+    g1 = _run_case(
+        core,
+        sessions,
+        EvalCase(
+            "flow_greet_01",
+            "flows",
+            "hi",
+            expected_intent="casual",
+            contains_any=["ready", "help"],
+            session_key="flow_d",
+            user_id="flow_user_d",
+            min_conf=65,
+        ),
+    )
+    rows.append(g1)
+    g2 = _run_case(
+        core,
+        sessions,
+        EvalCase(
+            "flow_greet_02",
+            "flows",
+            "hi",
+            expected_intent="casual",
+            contains_any=["again"],
+            session_key="flow_d",
+            user_id="flow_user_d",
+            min_conf=65,
+        ),
+    )
+    rows.append(g2)
+
     return rows
 
 
@@ -448,3 +507,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

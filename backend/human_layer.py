@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from typing import Any
@@ -138,10 +138,7 @@ class HumanLayer:
             return text
 
         # friendly
-        text = base
-        if not HumanLayer._is_short_or_greeting(text) and not re.match(r"^(sure|of course|happy to help)[\.\,]?", text.lower()):
-            text = f"Of course. {text}"
-        return text
+        return base
 
     @staticmethod
     def safety_response(text: str) -> dict[str, Any] | None:
@@ -233,3 +230,4 @@ class HumanLayer:
         if topic_clean in {"who am i", "my name", "general"} and len(ans.split()) > 20:
             return False, "Personal/meta topics require concise validated answers."
         return True, "Learning guard passed."
+
