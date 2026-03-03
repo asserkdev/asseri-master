@@ -752,48 +752,95 @@ body.hide-confidence .confidence-wrap {
 }
 
 @media (max-width: 900px) {
+  body {
+    overflow: auto;
+  }
+
   .app {
     grid-template-columns: 1fr;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+    height: auto;
+    min-height: 100dvh;
     padding: 10px;
     gap: 10px;
   }
 
-  .sidebar {
-    max-height: 44vh;
+  .chat-shell {
+    order: 1;
+    min-height: 58dvh;
+    border-radius: 16px;
   }
 
-  .sessions-list {
-    max-height: 20vh;
+  .sidebar {
+    order: 2;
+    max-height: 32dvh;
+    border-radius: 16px;
+    padding: 10px;
+  }
+
+  .brand-mark {
+    max-width: 220px;
+  }
+
+  .auth-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .more-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .more-search {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-header {
+    padding: 12px;
+  }
+
+  .chat-tools {
+    padding: 8px 12px;
+  }
+
+  .messages {
+    padding: 12px;
   }
 
   .msg {
-    max-width: 94%;
+    max-width: 100%;
+  }
+
+  .composer {
+    padding: 10px 12px;
+    grid-template-columns: 1fr auto;
   }
 }
 
 @media (max-width: 640px) {
   .app {
     padding: 8px;
+    gap: 8px;
   }
 
-  .chat-header,
-  .chat-tools,
-  .messages,
-  .composer {
-    padding-left: 12px;
-    padding-right: 12px;
+  .sidebar {
+    max-height: 36dvh;
   }
 
   .auth-actions {
     grid-template-columns: 1fr;
   }
 
-  .more-grid {
-    grid-template-columns: 1fr 1fr;
+  .chat-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
   }
 
-  .more-search {
+  .chat-header-meta {
+    width: 100%;
+  }
+
+  .more-grid {
     grid-template-columns: 1fr;
   }
 
@@ -803,5 +850,33 @@ body.hide-confidence .confidence-wrap {
 
   .composer .btn {
     width: 100%;
+  }
+
+  .panel-toggle {
+    font-size: 0.78rem;
+    padding: 10px;
+  }
+}
+
+@media (max-width: 420px) {
+  .app {
+    padding: 6px;
+  }
+
+  .chat-header,
+  .chat-tools,
+  .messages,
+  .composer {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .profile-avatar {
+    width: 32px;
+    height: 32px;
+  }
+
+  .brand-mark img {
+    max-height: 64px;
   }
 }
