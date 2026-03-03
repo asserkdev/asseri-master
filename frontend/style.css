@@ -93,25 +93,25 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 2px;
+  padding: 2px;
 }
 
 .brand-mark {
   width: 100%;
   max-width: 280px;
-  min-height: 76px;
+  min-height: 0;
   border-radius: 14px;
   display: grid;
   place-items: center;
-  overflow: hidden;
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(245, 250, 255, 0.9));
-  border: 1px solid rgba(27, 63, 108, 0.2);
-  box-shadow: 0 8px 18px rgba(15, 37, 63, 0.12);
+  overflow: visible;
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
 .brand-mark img {
   width: 100%;
-  max-height: 74px;
+  max-height: 82px;
   object-fit: contain;
   display: block;
 }
@@ -318,6 +318,7 @@ body {
 .profile-main span {
   font-size: 0.74rem;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .profile-caret {
@@ -332,12 +333,21 @@ body {
 
 .profile-details {
   margin-top: 8px;
+  max-height: min(44vh, 320px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 2px;
 }
 
 .profile-details label {
   font-size: 0.76rem;
   color: var(--muted);
   font-weight: 700;
+}
+
+.profile-panel .panel-content {
+  max-height: min(58vh, 420px);
+  overflow-y: auto;
 }
 
 .toggle-row {

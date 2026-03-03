@@ -107,6 +107,7 @@ const ui = {
   searchInput: document.getElementById("searchInput"),
   searchBtn: document.getElementById("searchBtn"),
   profileCard: document.getElementById("profileCard"),
+  profilePanel: document.querySelector(".profile-panel"),
   profileAvatar: document.getElementById("profileAvatar"),
   profileDisplayName: document.getElementById("profileDisplayName"),
   profileHint: document.getElementById("profileHint"),
@@ -1417,8 +1418,17 @@ if (ui.applyToneBtn) {
 
 if (ui.profileCard) {
   ui.profileCard.addEventListener("click", () => {
+    if (ui.profilePanel && !ui.profilePanel.open) {
+      ui.profilePanel.open = true;
+    }
     const isOpen = !ui.profileDetails || ui.profileDetails.classList.contains("hidden");
     setProfileDetailsOpen(isOpen);
+  });
+}
+
+if (ui.profilePanel) {
+  ui.profilePanel.addEventListener("toggle", () => {
+    setProfileDetailsOpen(Boolean(ui.profilePanel.open));
   });
 }
 
