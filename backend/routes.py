@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import logging
 import os
@@ -40,6 +40,21 @@ class TagsRequest(BaseModel):
 
 class TonePreferenceRequest(BaseModel):
     tone: str = Field(min_length=3, max_length=16)
+
+
+class AutonomyGoalCreateRequest(BaseModel):
+    title: str = Field(min_length=3, max_length=180)
+    trigger: str = Field(default="", max_length=240)
+    priority: str = Field(default="normal", min_length=3, max_length=8)
+
+
+class AutonomyGoalUpdateRequest(BaseModel):
+    status: str | None = Field(default=None, min_length=4, max_length=16)
+    priority: str | None = Field(default=None, min_length=3, max_length=8)
+
+
+class AutonomyRunRequest(BaseModel):
+    max_steps: int = Field(default=6, ge=1, le=20)
 
 
 class PinRequest(BaseModel):
@@ -373,6 +388,159 @@ def set_tone_preference(payload: TonePreferenceRequest, request: Request) -> dic
     return {"ok": True, "user_id": resolved, "tone": tone}
 
 
+@api_router.get("/autonomy/capabilities")
+def autonomy_capabilities(request: Request) -> dict[str, Any]:
+    ai: AICore = request.app.state.ai_core
+    resolved = _require_user_id(request)
+    goals = ai.list_autonomy_goals(user_id=resolved)
+    summary = {
+        "total": len(goals),
+        "open": len([g for g in goals if str(g.get("status", "")).lower() == "open"]),
+        "in_progress": len([g for g in goals if str(g.get("status", "")).lower() == "in_progress"]),
+        "done": len([g for g in goals if str(g.get("status", "")).lower() == "done"]),
+        "blocked": len([g for g in goals if str(g.get("status", "")).lower() == "blocked"]),
+    }
+    return {
+        "user_id": resolved,
+        "capabilities": ai.autonomy_capabilities(),
+        "goals_summary": summary,
+    }
+
+
+@api_router.get("/autonomy/goals")
+def autonomy_goals(request: Request, status: str | None = None, limit: int = 30) -> dict[str, Any]:
+    ai: AICore = request.app.state.ai_core
+    resolved = _require_user_id(request)
+    goals = ai.list_autonomy_goals(user_id=resolved)
+    status_filter = str(status or "").strip().lower()
+    if status_filter:
+        allowed = {"open", "in_progress", "done", "blocked"}
+        if status_filter not in allowed:
+            raise HTTPException(status_code=400, detail="status must be one of: open, in_progress, done, blocked.")
+        goals = [g for g in goals if str(g.get("status", "")).lower() == status_filter]
+    safe_limit = max(1, min(int(limit), 100))
+    return {
+        "user_id": resolved,
+        "count": len(goals),
+        "goals": goals[:safe_limit],
+    }
+
+
+@api_router.post("/autonomy/goals")
+def autonomy_goals_create(payload: AutonomyGoalCreateRequest, request: Request) -> dict[str, Any]:
+    ai: AICore = request.app.state.ai_core
+    resolved = _require_user_id(request)
+    title = str(payload.title or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required.")
+    priority = str(payload.priority or "normal").strip().lower()
+    if priority not in {"low", "normal", "high"}:
+        raise HTTPException(status_code=400, detail="priority must be one of: low, normal, high.")
+    created = ai.add_autonomy_goal(
+        title=title,
+        trigger=str(payload.trigger or "").strip(),
+        priority=priority,
+        user_id=resolved,
+    )
+    if not created:
+        raise HTTPException(status_code=400, detail="Unable to create autonomy goal.")
+    return {
+        "ok": True,
+        "user_id": resolved,
+        "goal": created,
+    }
+
+
+@api_router.patch("/autonomy/goals/{goal_id}")
+def autonomy_goals_update(goal_id: str, payload: AutonomyGoalUpdateRequest, request: Request) -> dict[str, Any]:
+    ai: AICore = request.app.state.ai_core
+    resolved = _require_user_id(request)
+    clean_goal_id = str(goal_id or "").strip().lower()
+    if not clean_goal_id:
+        raise HTTPException(status_code=400, detail="goal_id is required.")
+
+    existing = None
+    for row in ai.list_autonomy_goals(user_id=resolved):
+        row_id = str(row.get("id", "")).strip().lower()
+        if row_id == clean_goal_id:
+            existing = row
+            break
+    if not existing:
+        raise HTTPException(status_code=404, detail="Goal not found.")
+
+    next_status = str(payload.status or existing.get("status", "open")).strip().lower()
+    if next_status not in {"open", "in_progress", "done", "blocked"}:
+        raise HTTPException(status_code=400, detail="status must be one of: open, in_progress, done, blocked.")
+
+    next_priority = str(payload.priority or "").strip().lower()
+    if next_priority and next_priority not in {"low", "normal", "high"}:
+        raise HTTPException(status_code=400, detail="priority must be one of: low, normal, high.")
+
+    updated = ai.set_autonomy_goal_status(
+        clean_goal_id,
+        next_status,
+        priority=next_priority or None,
+        user_id=resolved,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Goal not found.")
+
+    return {
+        "ok": True,
+        "user_id": resolved,
+        "goal": updated,
+    }
+
+
+@api_router.delete("/autonomy/goals/{goal_id}")
+def autonomy_goals_delete(goal_id: str, request: Request) -> dict[str, Any]:
+    ai: AICore = request.app.state.ai_core
+    resolved = _require_user_id(request)
+    deleted = ai.delete_autonomy_goal(goal_id, user_id=resolved)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Goal not found.")
+    return {
+        "ok": True,
+        "user_id": resolved,
+        "deleted_goal_id": goal_id,
+    }
+
+
+@api_router.delete("/autonomy/goals")
+def autonomy_goals_clear(request: Request) -> dict[str, Any]:
+    ai: AICore = request.app.state.ai_core
+    resolved = _require_user_id(request)
+    deleted_count = ai.clear_autonomy_goals(user_id=resolved)
+    return {
+        "ok": True,
+        "user_id": resolved,
+        "deleted_count": int(deleted_count),
+    }
+
+
+@api_router.post("/autonomy/goals/run")
+def autonomy_goals_run(payload: AutonomyRunRequest, request: Request) -> dict[str, Any]:
+    ai: AICore = request.app.state.ai_core
+    resolved = _require_user_id(request)
+    report = ai.run_autonomy_goal_cycle(max_steps=int(payload.max_steps), user_id=resolved)
+    return {
+        "ok": True,
+        "user_id": resolved,
+        "report": report,
+        "goals": ai.list_autonomy_goals(user_id=resolved),
+    }
+
+
+@api_router.get("/autonomy/self-upgrade-plan")
+def autonomy_self_upgrade_plan(request: Request) -> dict[str, Any]:
+    ai: AICore = request.app.state.ai_core
+    resolved = _require_user_id(request)
+    return {
+        "user_id": resolved,
+        "plan": ai.generate_self_upgrade_plan(user_id=resolved),
+    }
+
+
 @api_router.get("/chat/suggestions")
 def chat_suggestions(request: Request) -> dict[str, Any]:
     resolved = _require_user_id(request)
@@ -549,3 +717,7 @@ def chat_feedback(payload: FeedbackRequest, request: Request) -> dict[str, Any]:
         memory.adjust_rule_confidence(topic, -0.08, user_id=resolved)
 
     return {"ok": True, "user_id": resolved, "session_id": payload.session_id, "topic": topic, "signal": signal}
+
+
+
+

@@ -1,6 +1,8 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import json
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from .accuracy_policy import AccuracyPolicy
@@ -62,11 +64,11 @@ class AICore:
             "that is correct",
             "good answer",
             "yes correct",
-            "صحيح",
-            "صح",
-            "ممتاز",
-            "بالضبط",
-            "نعم صحيح",
+            "ØµØ­ÙŠØ­",
+            "ØµØ­",
+            "Ù…Ù…ØªØ§Ø²",
+            "Ø¨Ø§Ù„Ø¶Ø¨Ø·",
+            "Ù†Ø¹Ù… ØµØ­ÙŠØ­",
         }
 
     @staticmethod
@@ -86,13 +88,13 @@ class AICore:
             "okay",
             "sure",
             "go ahead",
-            "نعم",
-            "ايوه",
-            "ايوا",
-            "تمام",
-            "صحيح",
-            "صح",
-            "موافق",
+            "Ù†Ø¹Ù…",
+            "Ø§ÙŠÙˆÙ‡",
+            "Ø§ÙŠÙˆØ§",
+            "ØªÙ…Ø§Ù…",
+            "ØµØ­ÙŠØ­",
+            "ØµØ­",
+            "Ù…ÙˆØ§ÙÙ‚",
         }
 
     @staticmethod
@@ -109,19 +111,19 @@ class AICore:
             "not correct",
             "wrong",
             "keep original",
-            "لا",
-            "لا شكرا",
-            "مو",
-            "مش",
-            "غلط",
-            "خطا",
+            "Ù„Ø§",
+            "Ù„Ø§ Ø´ÙƒØ±Ø§",
+            "Ù…Ùˆ",
+            "Ù…Ø´",
+            "ØºÙ„Ø·",
+            "Ø®Ø·Ø§",
         }
 
     @staticmethod
     def _is_correction(text: str) -> bool:
         t = str(text or "").lower()
         compact = re.sub(r"\s+", " ", re.sub(r"[^\w\s\u0600-\u06FF]", " ", t)).strip()
-        if compact in {"wrong", "also wrong", "still wrong", "not correct", "خطا", "غلط", "هذا خطا", "هذا غلط"}:
+        if compact in {"wrong", "also wrong", "still wrong", "not correct", "Ø®Ø·Ø§", "ØºÙ„Ø·", "Ù‡Ø°Ø§ Ø®Ø·Ø§", "Ù‡Ø°Ø§ ØºÙ„Ø·"}:
             return True
         if any(
             x in t
@@ -134,18 +136,18 @@ class AICore:
                 "correct answer is",
                 "you are wrong",
                 "wrong answer",
-                "هذا خطا",
-                "هذا غلط",
-                "الاجابة الصحيحة",
-                "التصحيح",
+                "Ù‡Ø°Ø§ Ø®Ø·Ø§",
+                "Ù‡Ø°Ø§ ØºÙ„Ø·",
+                "Ø§Ù„Ø§Ø¬Ø§Ø¨Ø© Ø§Ù„ØµØ­ÙŠØ­Ø©",
+                "Ø§Ù„ØªØµØ­ÙŠØ­",
             ]
         ):
             return True
-        if re.search(r"^(?:no[, ]|actually[, ]|correction[: ]|لا[, ]|تصحيح[: ])", t):
+        if re.search(r"^(?:no[, ]|actually[, ]|correction[: ]|Ù„Ø§[, ]|ØªØµØ­ÙŠØ­[: ])", t):
             return True
-        if "you mean" in t or "تقصد" in t:
+        if "you mean" in t or "ØªÙ‚ØµØ¯" in t:
             return True
-        if (" means " in t or " = " in t or " يعني " in t) and any(x in t for x in ["wrong", "incorrect", "no,", "actually", "غلط", "خطا"]):
+        if (" means " in t or " = " in t or " ÙŠØ¹Ù†ÙŠ " in t) and any(x in t for x in ["wrong", "incorrect", "no,", "actually", "ØºÙ„Ø·", "Ø®Ø·Ø§"]):
             return True
         return False
 
@@ -178,21 +180,21 @@ class AICore:
             "tone mode",
             "my tone",
             "what tone",
-            "من انا",
-            "ما اسمي",
-            "حسابي",
-            "كم ثقتك",
-            "من اين تعلمت",
+            "Ù…Ù† Ø§Ù†Ø§",
+            "Ù…Ø§ Ø§Ø³Ù…ÙŠ",
+            "Ø­Ø³Ø§Ø¨ÙŠ",
+            "ÙƒÙ… Ø«Ù‚ØªÙƒ",
+            "Ù…Ù† Ø§ÙŠÙ† ØªØ¹Ù„Ù…Øª",
             "set tone to",
             "set response mode to",
-            "من انا",
-            "ما اسمي",
-            "ما اسمك",
-            "حسابي",
-            "من اين تعلمت",
-            "كم ثقتك",
-            "نبرة الرد",
-            "غير النبرة",
+            "Ù…Ù† Ø§Ù†Ø§",
+            "Ù…Ø§ Ø§Ø³Ù…ÙŠ",
+            "Ù…Ø§ Ø§Ø³Ù…Ùƒ",
+            "Ø­Ø³Ø§Ø¨ÙŠ",
+            "Ù…Ù† Ø§ÙŠÙ† ØªØ¹Ù„Ù…Øª",
+            "ÙƒÙ… Ø«Ù‚ØªÙƒ",
+            "Ù†Ø¨Ø±Ø© Ø§Ù„Ø±Ø¯",
+            "ØºÙŠØ± Ø§Ù„Ù†Ø¨Ø±Ø©",
         ]
         return any(p in t for p in patterns)
 
@@ -221,11 +223,11 @@ class AICore:
             "tone mode",
             "my tone",
             "what tone",
-            "من انا",
-            "ما اسمي",
-            "حسابي",
-            "كم ثقتك",
-            "من اين تعلمت",
+            "Ù…Ù† Ø§Ù†Ø§",
+            "Ù…Ø§ Ø§Ø³Ù…ÙŠ",
+            "Ø­Ø³Ø§Ø¨ÙŠ",
+            "ÙƒÙ… Ø«Ù‚ØªÙƒ",
+            "Ù…Ù† Ø§ÙŠÙ† ØªØ¹Ù„Ù…Øª",
         ]
         if any(p in t for p in direct):
             return True
@@ -412,6 +414,473 @@ class AICore:
         if safe_block:
             return False, "Candidate conflicts with safety policy."
         return True, note
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat()
+
+    @staticmethod
+    def _slugify_key(text: str) -> str:
+        slug = re.sub(r"[^a-z0-9]+", "_", str(text or "").lower()).strip("_")
+        return slug[:72] if slug else "general"
+
+    def _decompose_intent_plan(self, query: str, base_intent: str) -> dict[str, Any]:
+        compact = re.sub(r"\s+", " ", str(query or "").strip())
+        if not compact:
+            return {"intent": base_intent, "steps": []}
+
+        parts = [
+            p.strip(" .?!")
+            for p in re.split(r"\s*(?:;|\band then\b|\bthen\b|\balso\b)\s*", compact, flags=re.IGNORECASE)
+            if p.strip(" .?!")
+        ]
+        if len(parts) <= 1:
+            return {"intent": base_intent, "steps": []}
+
+        part_intents: list[str] = []
+        for part in parts[:4]:
+            part_intents.append(self._intent(self._semantic_normalize(part)))
+
+        uniq = {i for i in part_intents if i}
+        resolved = base_intent
+        steps = [f"Intent decomposition detected {len(parts)} clauses."]
+        steps.append("Clause intents: " + ", ".join(part_intents[:4]))
+
+        if "math" in uniq and len(uniq) >= 2:
+            resolved = "problem_solving"
+            steps.append("Mixed math + non-math clauses; switched to problem_solving orchestration.")
+        elif "problem_solving" in uniq and base_intent == "knowledge":
+            resolved = "problem_solving"
+            steps.append("Found reasoning-oriented clause; upgraded intent to problem_solving.")
+        elif base_intent in {"casual", "feedback", "safety"}:
+            resolved = base_intent
+            steps.append("Kept original non-knowledge intent for stability.")
+        else:
+            steps.append("Kept original intent after decomposition.")
+
+        return {
+            "intent": resolved,
+            "steps": steps,
+            "clauses": parts[:4],
+            "clause_intents": part_intents[:4],
+        }
+
+    def _candidate_promotion_guard(self, topic: str, candidate: dict[str, Any], user_id: str | None = None) -> tuple[bool, str]:
+        if not isinstance(candidate, dict):
+            return False, "Invalid candidate payload."
+        answer = self._strip_conf(str(candidate.get("answer", ""))).strip()
+        if not answer:
+            return False, "Candidate answer is empty."
+
+        signals = candidate.get("signals", {}) if isinstance(candidate.get("signals"), dict) else {}
+        source = str(candidate.get("source", "")).strip().lower()
+        confirmations = int(signals.get("confirmations", 0))
+        support_sources = int(signals.get("supporting_sources", 0))
+        contradictions = int(signals.get("contradictions", 0))
+
+        if contradictions > 0:
+            return False, "Candidate has contradiction signals."
+
+        if source in {"user_correction", "user_teaching"}:
+            if confirmations < 2:
+                return False, "User-provided candidate needs at least 2 confirmations."
+            if support_sources < 1:
+                return False, "User-provided candidate needs trusted source support."
+
+        if source == "model_retry" and confirmations < 1 and support_sources < 1:
+            return False, "Model retry candidate needs at least one confirmation or source signal."
+
+        topic_low = str(topic or "").lower()
+        if self._is_meta_personal_query(topic_low) and confirmations < 2:
+            return False, "Personal/meta topics require stronger confirmation before promotion."
+
+        return True, "Promotion guard checks passed."
+
+    def _load_autonomy_goals(self, user_id: str | None = None) -> list[dict[str, Any]]:
+        payload = self.memory.get_user_fact("autonomy_goals", user_id=user_id)
+        current = payload.get("current", {}) if isinstance(payload, dict) else {}
+        raw = str(current.get("value", "")).strip() if isinstance(current, dict) else ""
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list):
+                out: list[dict[str, Any]] = []
+                for row in data:
+                    if isinstance(row, dict) and str(row.get("title", "")).strip():
+                        out.append(dict(row))
+                return out[:30]
+        except Exception:
+            return []
+        return []
+
+    def _save_autonomy_goals(self, goals: list[dict[str, Any]], user_id: str | None = None) -> None:
+        clean = [g for g in goals if isinstance(g, dict) and str(g.get("title", "")).strip()]
+        self.memory.remember_user_fact(
+            "autonomy_goals",
+            json.dumps(clean[:30], ensure_ascii=True),
+            confidence=0.74,
+            source="autonomy_loop",
+            user_id=user_id,
+        )
+
+    @staticmethod
+    def _normalize_goal_status(status: str) -> str:
+        value = str(status or "").strip().lower()
+        if value in {"open", "in_progress", "done", "blocked"}:
+            return value
+        return "open"
+
+    def list_autonomy_goals(self, user_id: str | None = None) -> list[dict[str, Any]]:
+        goals = self._load_autonomy_goals(user_id=user_id)
+        for row in goals:
+            row["status"] = self._normalize_goal_status(str(row.get("status", "open")))
+            pr = str(row.get("priority", "normal")).strip().lower()
+            row["priority"] = pr if pr in {"low", "normal", "high"} else "normal"
+            row["id"] = str(row.get("id", "")).strip() or self._slugify_key(str(row.get("title", "")))
+            row["count"] = max(1, int(row.get("count", 1)))
+        return goals[:30]
+
+    def add_autonomy_goal(
+        self,
+        title: str,
+        trigger: str = "",
+        *,
+        priority: str = "normal",
+        user_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        clean_title = re.sub(r"\s+", " ", str(title or "").strip())
+        if not clean_title:
+            return None
+        pr = str(priority or "normal").strip().lower()
+        safe_priority = pr if pr in {"low", "normal", "high"} else "normal"
+        self._queue_autonomy_goal(clean_title, trigger, priority=safe_priority, user_id=user_id)
+        goals = self.list_autonomy_goals(user_id=user_id)
+        for row in goals:
+            if str(row.get("title", "")).strip().lower() == clean_title.lower():
+                return row
+        return None
+
+    def set_autonomy_goal_status(
+        self,
+        goal_id: str,
+        status: str,
+        *,
+        priority: str | None = None,
+        user_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        clean_goal_id = self._slugify_key(str(goal_id or "").strip())
+        if not clean_goal_id:
+            return None
+        next_status = self._normalize_goal_status(status)
+        next_priority = str(priority or "").strip().lower()
+        goals = self.list_autonomy_goals(user_id=user_id)
+        updated: dict[str, Any] | None = None
+        for row in goals:
+            row_id = self._slugify_key(str(row.get("id", "")).strip() or str(row.get("title", "")))
+            if row_id != clean_goal_id:
+                continue
+            row["id"] = row_id
+            row["status"] = next_status
+            if next_priority in {"low", "normal", "high"}:
+                row["priority"] = next_priority
+            row["last_seen"] = self._now_iso()
+            updated = dict(row)
+            break
+        if not updated:
+            return None
+        self._save_autonomy_goals(goals, user_id=user_id)
+        return updated
+
+    def delete_autonomy_goal(self, goal_id: str, user_id: str | None = None) -> bool:
+        clean_goal_id = self._slugify_key(str(goal_id or "").strip())
+        if not clean_goal_id:
+            return False
+        goals = self.list_autonomy_goals(user_id=user_id)
+        filtered = [
+            row
+            for row in goals
+            if self._slugify_key(str(row.get("id", "")).strip() or str(row.get("title", ""))) != clean_goal_id
+        ]
+        if len(filtered) == len(goals):
+            return False
+        self._save_autonomy_goals(filtered, user_id=user_id)
+        return True
+
+    def clear_autonomy_goals(self, user_id: str | None = None) -> int:
+        goals = self.list_autonomy_goals(user_id=user_id)
+        count = len(goals)
+        self._save_autonomy_goals([], user_id=user_id)
+        return count
+
+    def run_autonomy_goal_cycle(self, max_steps: int = 6, user_id: str | None = None) -> dict[str, Any]:
+        safe_steps = max(1, min(int(max_steps), 20))
+        goals = self.list_autonomy_goals(user_id=user_id)
+        processed: list[dict[str, Any]] = []
+
+        for row in goals:
+            if len(processed) >= safe_steps:
+                break
+            status = self._normalize_goal_status(str(row.get("status", "open")))
+            if status not in {"open", "in_progress"}:
+                continue
+
+            row["count"] = max(1, int(row.get("count", 1))) + 1
+            if status == "open":
+                row["status"] = "in_progress"
+                action = "started"
+            elif row["count"] >= 4:
+                row["status"] = "done"
+                action = "completed"
+            else:
+                row["status"] = "in_progress"
+                action = "continued"
+
+            row["last_seen"] = self._now_iso()
+            processed.append(
+                {
+                    "id": str(row.get("id", "")).strip(),
+                    "title": str(row.get("title", "")).strip(),
+                    "action": action,
+                    "status": str(row.get("status", "open")),
+                    "count": int(row.get("count", 1)),
+                }
+            )
+
+        if processed:
+            self._save_autonomy_goals(goals, user_id=user_id)
+
+        remaining_open = len([g for g in goals if str(g.get("status", "")).lower() in {"open", "in_progress"}])
+        return {
+            "processed_count": len(processed),
+            "remaining_open": remaining_open,
+            "processed": processed,
+        }
+
+    def generate_self_upgrade_plan(self, user_id: str | None = None) -> dict[str, Any]:
+        goals = self.list_autonomy_goals(user_id=user_id)
+        open_goals = [g for g in goals if str(g.get("status", "")).lower() in {"open", "in_progress"}]
+        decisions = self.memory.recent_decisions(limit=12, user_id=user_id)
+        plan_items: list[dict[str, Any]] = []
+
+        for goal in open_goals[:6]:
+            pr = str(goal.get("priority", "normal")).lower()
+            complexity = 5 if pr == "high" else (3 if pr == "normal" else 2)
+            plan_items.append(
+                {
+                    "goal_id": str(goal.get("id", "")).strip(),
+                    "title": str(goal.get("title", "")).strip(),
+                    "priority": pr,
+                    "estimated_complexity": complexity,
+                    "expected_impact": "high" if pr == "high" else "medium",
+                    "safe_action": "create_patch_then_require_human_review",
+                }
+            )
+
+        if not plan_items and decisions:
+            top = decisions[0] if isinstance(decisions[0], dict) else {}
+            topic = str(top.get("topic", "general")).strip() or "general"
+            plan_items.append(
+                {
+                    "goal_id": f"stability_{self._slugify_key(topic)}",
+                    "title": f"Stabilize low-confidence behavior for {topic}",
+                    "priority": "normal",
+                    "estimated_complexity": 3,
+                    "expected_impact": "medium",
+                    "safe_action": "create_patch_then_require_human_review",
+                }
+            )
+
+        return {
+            "current_version": "1.0-beta",
+            "proposed_version": "1.1-simulated",
+            "safe_to_autodeploy": False,
+            "items": plan_items,
+            "decision_signals_used": len(decisions),
+        }
+
+    def autonomy_capabilities(self) -> dict[str, Any]:
+        return {
+            "autonomy_loop": {
+                "enabled": True,
+                "bounded_iterations": 2,
+                "description": "Self-critique and candidate refinement runs in bounded loops per request.",
+            },
+            "long_running_tasks": {
+                "enabled": True,
+                "description": "Supports bounded multi-step autonomy cycles via /api/autonomy/goals/run.",
+            },
+            "self_upgrading_code": {
+                "enabled": False,
+                "description": "Auto-deployment is disabled; the system can only generate upgrade plans for human review.",
+            },
+            "independent_decisions": {
+                "enabled": True,
+                "description": "Routes between internal math, memory, and web evidence with safety guards.",
+            },
+        }
+
+    def _queue_autonomy_goal(
+        self,
+        title: str,
+        trigger: str,
+        *,
+        priority: str = "normal",
+        user_id: str | None = None,
+    ) -> None:
+        text = re.sub(r"\s+", " ", str(title or "").strip())
+        trig = re.sub(r"\s+", " ", str(trigger or "").strip())
+        if not text:
+            return
+        goals = self._load_autonomy_goals(user_id=user_id)
+        for row in goals:
+            if str(row.get("title", "")).strip().lower() == text.lower() and str(row.get("status", "open")).lower() == "open":
+                row["count"] = int(row.get("count", 1)) + 1
+                row["last_seen"] = self._now_iso()
+                row["trigger"] = trig or str(row.get("trigger", ""))
+                self._save_autonomy_goals(goals, user_id=user_id)
+                return
+        goals.insert(
+            0,
+            {
+                "id": self._slugify_key(text),
+                "title": text,
+                "status": "open",
+                "priority": priority if priority in {"low", "normal", "high"} else "normal",
+                "trigger": trig,
+                "count": 1,
+                "created": self._now_iso(),
+                "last_seen": self._now_iso(),
+            },
+        )
+        self._save_autonomy_goals(goals[:30], user_id=user_id)
+
+    def _autonomy_refinement_loop(
+        self,
+        *,
+        query: str,
+        topic: str,
+        intent: str,
+        answer: str,
+        references: list[dict[str, str]],
+        confidence: float,
+        relevance: float,
+        focus_overlap: float,
+        internal_candidate: dict[str, Any] | None,
+        should_search_web: bool,
+        planned_variants: int,
+        strict_fact_check: bool,
+        user_id: str | None = None,
+    ) -> tuple[str, list[dict[str, str]], float, float, float, list[str]]:
+        notes: list[str] = []
+        if intent not in {"knowledge", "problem_solving"}:
+            return answer, references, confidence, relevance, focus_overlap, notes
+
+        best_answer = str(answer or "").strip()
+        best_refs = list(references or [])
+        best_conf = float(confidence)
+        best_rel = float(relevance)
+        best_focus = float(focus_overlap)
+
+        loops = 0
+        while loops < 2:
+            need_retry = best_conf < 0.74 or best_rel < 0.16 or best_focus < 0.28
+            if not need_retry:
+                break
+            if not should_search_web and not internal_candidate:
+                break
+
+            loops += 1
+            vote = self._consensus_vote_answer(
+                query=query,
+                topic=topic,
+                intent=intent,
+                primary_answer=best_answer,
+                primary_refs=best_refs,
+                primary_conf=best_conf,
+                internal_candidate=internal_candidate,
+                should_search_web=True,
+                planned_variants=max(3, int(planned_variants) + loops),
+                strict_fact_check=True if strict_fact_check or loops >= 2 else False,
+                user_id=user_id,
+            )
+            cand_answer = str(vote.get("answer", "")).strip()
+            if not cand_answer:
+                notes.append("Autonomy loop found no stronger candidate.")
+                break
+            cand_conf = float(vote.get("confidence", best_conf))
+            cand_rel = float(vote.get("relevance", best_rel))
+            cand_focus = float(vote.get("focus_overlap", cand_rel))
+
+            improved = (cand_conf >= best_conf + 0.03 and cand_rel >= max(best_rel, 0.16)) or (
+                cand_rel >= best_rel + 0.08 and cand_conf >= best_conf
+            )
+            if not improved:
+                notes.append("Autonomy loop kept current candidate after quality comparison.")
+                break
+
+            best_answer = cand_answer
+            best_refs = self._merge_references(best_refs, list(vote.get("references", [])))
+            best_conf = self._clamp(cand_conf)
+            best_rel = cand_rel
+            best_focus = cand_focus
+            notes.append(f"Autonomy loop iteration {loops} improved candidate quality.")
+
+        if loops > 0:
+            notes.append(f"Autonomy loop iterations executed: {loops}.")
+        return best_answer, best_refs, best_conf, best_rel, best_focus, notes
+
+    def _autonomy_post_task_review(
+        self,
+        *,
+        topic: str,
+        intent: str,
+        confidence: float,
+        understanding_conf: float,
+        route: str,
+        correction_count: int,
+        user_id: str | None = None,
+    ) -> list[str]:
+        notes: list[str] = []
+        topic_label = topic if topic and topic not in {"general", "error"} else "current topic"
+
+        if confidence < 0.7:
+            self._queue_autonomy_goal(
+                f"Improve low-confidence handling for {topic_label}",
+                f"confidence={confidence:.2f}",
+                priority="high",
+                user_id=user_id,
+            )
+            notes.append("Autonomy review queued goal for low-confidence topic handling.")
+
+        if intent == "clarification" and understanding_conf < 0.45:
+            self._queue_autonomy_goal(
+                "Expand phrasing coverage for ambiguous user wording",
+                f"understanding={understanding_conf:.2f}",
+                priority="high",
+                user_id=user_id,
+            )
+            notes.append("Autonomy review queued goal for broader phrasing support.")
+
+        if correction_count >= 2:
+            self._queue_autonomy_goal(
+                f"Strengthen validation before learning for {topic_label}",
+                f"corrections={correction_count}",
+                priority="normal",
+                user_id=user_id,
+            )
+            notes.append("Autonomy review queued goal for stricter learning validation.")
+
+        if route in {"web_first", "hybrid_verify"} and confidence < 0.76:
+            self._queue_autonomy_goal(
+                f"Reduce web dependency with stronger internal knowledge for {topic_label}",
+                f"route={route}",
+                priority="normal",
+                user_id=user_id,
+            )
+            notes.append("Autonomy review queued goal to improve internal coverage.")
+
+        return notes
 
     @staticmethod
     def _extract_teaching_value(text: str) -> str | None:
@@ -1105,7 +1574,7 @@ class AICore:
                 "direct_reasoning": True,
             }
 
-        grav_year = re.search(r"discovery of gravity.*\b(1[0-9]{3}|20[0-9]{2})\b", low)
+        grav_year = re.search(r"(?:discovery of gravity|gravity(?:\s+was|\s+is)?\s+discovered(?:\s+in)?|discover(?:ed)?\s+gravity).*?\b(1[0-9]{3}|20[0-9]{2})\b", low)
         if grav_year:
             year = int(grav_year.group(1))
             if year >= 1700:
@@ -1119,7 +1588,7 @@ class AICore:
                     "intent": "knowledge",
                     "references": [
                         {"title": "Newton's law of universal gravitation", "url": "https://en.wikipedia.org/wiki/Newton%27s_law_of_universal_gravitation"},
-                        {"title": "PhilosophiÃ¦ Naturalis Principia Mathematica", "url": "https://en.wikipedia.org/wiki/Philosophi%C3%A6_Naturalis_Principia_Mathematica"},
+                        {"title": "PhilosophiÃƒÂ¦ Naturalis Principia Mathematica", "url": "https://en.wikipedia.org/wiki/Philosophi%C3%A6_Naturalis_Principia_Mathematica"},
                         {"title": "General relativity", "url": "https://en.wikipedia.org/wiki/General_relativity"},
                     ],
                     "reasoning_steps": [
@@ -1505,6 +1974,17 @@ class AICore:
         if not candidate_answer:
             return False, "Candidate answer is empty."
 
+        guard_ok, guard_note = self._candidate_promotion_guard(topic, candidate, user_id=user_id)
+        if not guard_ok:
+            self.memory.mark_candidate_signal(topic, "contradictions", evidence=guard_note, user_id=user_id)
+            self._queue_autonomy_goal(
+                f"Harden learning safeguards for {topic}",
+                guard_note,
+                priority="high",
+                user_id=user_id,
+            )
+            return False, guard_note
+
         supported, note = self._candidate_validation_signal(topic, candidate_answer)
         if supported:
             self.memory.mark_candidate_signal(topic, "supporting_sources", evidence=note, user_id=user_id)
@@ -1513,8 +1993,8 @@ class AICore:
 
         promoted = self.memory.promote_candidate_rule(
             topic,
-            min_confidence=0.82,
-            min_support_signals=2,
+            min_confidence=0.84,
+            min_support_signals=3,
             user_id=user_id,
         )
         if promoted:
@@ -1597,14 +2077,14 @@ class AICore:
 
         if any(k in q_for_intent for k in ["logically follow", "does it follow", "valid argument", "syllogism", "if all ", "if some "]):
             return "problem_solving"
-        if any(k in q for k in ["هل يلزم", "هل يتبع", "منطق", "برهن", "اثبت"]):
+        if any(k in q for k in ["Ù‡Ù„ ÙŠÙ„Ø²Ù…", "Ù‡Ù„ ÙŠØªØ¨Ø¹", "Ù…Ù†Ø·Ù‚", "Ø¨Ø±Ù‡Ù†", "Ø§Ø«Ø¨Øª"]):
             return "problem_solving"
 
         if self._is_personal_session_query(q_for_intent):
             return "casual"
         if re.search(r"\b(my name|about me|remember me|am i)\b", q_for_intent):
             return "casual"
-        if any(k in q for k in ["اسمي", "من انا", "حسابي"]):
+        if any(k in q for k in ["Ø§Ø³Ù…ÙŠ", "Ù…Ù† Ø§Ù†Ø§", "Ø­Ø³Ø§Ø¨ÙŠ"]):
             return "casual"
 
         if self._is_assistant_identity_query(q_for_intent):
@@ -1623,9 +2103,9 @@ class AICore:
             return "casual"
 
         # Lightweight Arabic defaults.
-        if any(x in q for x in ["مرحبا", "اهلا", "سلام"]):
+        if any(x in q for x in ["Ù…Ø±Ø­Ø¨Ø§", "Ø§Ù‡Ù„Ø§", "Ø³Ù„Ø§Ù…"]):
             return "casual"
-        if any(x in q for x in ["ما اسمك", "من انت", "ماذا تستطيع"]):
+        if any(x in q for x in ["Ù…Ø§ Ø§Ø³Ù…Ùƒ", "Ù…Ù† Ø§Ù†Øª", "Ù…Ø§Ø°Ø§ ØªØ³ØªØ·ÙŠØ¹"]):
             return "casual"
 
         return "knowledge"
@@ -1670,7 +2150,7 @@ class AICore:
             low = line.strip().lower()
             if low.startswith("confidence:"):
                 continue
-            if re.match(r"^i['â€™]?m \d+% sure this is correct\.?$", low):
+            if re.match(r"^i['Ã¢â‚¬â„¢]?m \d+% sure this is correct\.?$", low):
                 continue
             kept.append(line)
         return "\n".join(kept).strip()
@@ -1696,7 +2176,7 @@ class AICore:
     def _extract_confidence_percent(text: str) -> int | None:
         if not text:
             return None
-        for pattern in [r"confidence:\s*(\d+)%", r"i(?:'|â€™)?m\s*(\d+)%\s*sure this is correct"]:
+        for pattern in [r"confidence:\s*(\d+)%", r"i(?:'|Ã¢â‚¬â„¢)?m\s*(\d+)%\s*sure this is correct"]:
             m = re.search(pattern, text, flags=re.IGNORECASE)
             if m:
                 try:
@@ -2034,6 +2514,9 @@ class AICore:
             "tell me about ",
             "explain ",
             "can you explain ",
+            "define ",
+            "definition of ",
+            "meaning of ",
         ]
         for p in prefixes:
             if q.startswith(p):
@@ -2045,6 +2528,11 @@ class AICore:
     def _semantic_normalize(query: str) -> str:
         q = re.sub(r"\s+", " ", query.strip().lower())
         q = re.sub(r"^(?:fact[\s-]?check|verify|double[\s-]?check)\s+", "", q)
+        q = re.sub(r"^(?:please|pls|plz)\s+", "", q)
+        q = re.sub(r"^(?:can you|could you|would you|will you)\s+", "", q)
+        q = re.sub(r"^(?:i want to know|i need to know|help me understand)\s+", "", q)
+        q = re.sub(r"\bwhat(?:'s|s)\b", "what is", q)
+        q = re.sub(r"\bwhats\b", "what is", q)
         q = re.sub(r"\bwhat\s+it\s+is\b", "what is", q)
         q = re.sub(r"\bwat is\b", "what is", q)
         q = re.sub(r"\bwht is\b", "what is", q)
@@ -2053,18 +2541,29 @@ class AICore:
         q = re.sub(r"\bartificial inteligence\b", "artificial intelligence", q)
         q = re.sub(r"\bwhat is a ai\b", "what is ai", q)
         q = re.sub(r"\bwhat is an ai\b", "what is ai", q)
-        q = re.sub(r"\ba ai\b", "ai", q)
-        q = re.sub(r"\ban ai\b", "ai", q)
+        q = re.sub(r"\b(?:a|an) ai\b", "ai", q)
         q = re.sub(r"\baeroplane\b", "airplane", q)
         q = re.sub(r"\bair craft\b", "aircraft", q)
+
+        for pattern, repl in [
+            (r"^define\s+(.+)$", r"what is \1"),
+            (r"^definition of\s+(.+)$", r"what is \1"),
+            (r"^meaning of\s+(.+)$", r"what is \1"),
+            (r"^what does\s+(.+?)\s+mean$", r"what is \1"),
+            (r"^tell me about\s+(.+)$", r"what is \1"),
+            (r"^explain what\s+(.+?)\s+is$", r"what is \1"),
+            (r"^give me\s+(?:\d+\s+)?(?:trusted\s+)?sources?\s+(?:about|for)\s+(.+)$", r"sources for \1"),
+            (r"^list\s+(?:\d+\s+)?sources?\s+(?:about|for)\s+(.+)$", r"sources for \1"),
+        ]:
+            q = re.sub(pattern, repl, q)
+
         q = re.sub(r"\bjob for\b", "purpose of", q)
         q = re.sub(r"\bjob of\b", "purpose of", q)
         q = re.sub(r"\brole of\b", "purpose of", q)
         q = re.sub(r"\bfunction of\b", "purpose of", q)
         q = re.sub(r"\bwork of\b", "purpose of", q)
         q = re.sub(r"\buse of\b", "purpose of", q)
-        q = re.sub(r"^give me (\d+) sources? for ", r"sources for ", q)
-        q = re.sub(r"^give me sources? for ", "sources for ", q)
+
         q = re.sub(r"\bin simple words\b", "", q)
         q = re.sub(r"\bsimple explanation\b", "", q)
         q = re.sub(r"\bfor beginners\b", "", q)
@@ -2074,6 +2573,7 @@ class AICore:
         q = re.sub(r"\bwith details\b", "", q)
         q = re.sub(r"\btechnical explanation\b", "", q)
         q = re.sub(r"\bbriefly\b", "", q)
+
         q = re.sub(r"\bof the\b", "of ", q)
         q = re.sub(r"\s+", " ", q).strip()
         return q
@@ -2912,7 +3412,7 @@ class AICore:
                 topic = self._topic_from_query("clarification")
                 conf = 0.9
                 if contains_arabic(raw_user):
-                    base_answer = "حسنًا، سأحتفظ بصياغتك الأصلية. أعد كتابة سؤالك وسأجيبك مباشرة."
+                    base_answer = "Ø­Ø³Ù†Ù‹Ø§ØŒ Ø³Ø£Ø­ØªÙØ¸ Ø¨ØµÙŠØ§ØºØªÙƒ Ø§Ù„Ø£ØµÙ„ÙŠØ©. Ø£Ø¹Ø¯ ÙƒØªØ§Ø¨Ø© Ø³Ø¤Ø§Ù„Ùƒ ÙˆØ³Ø£Ø¬ÙŠØ¨Ùƒ Ù…Ø¨Ø§Ø´Ø±Ø©."
                 else:
                     base_answer = ("Okay, I will keep your original wording. Please rewrite your question and I will answer it directly.")
                 tone_mode, _ = self._resolve_tone_mode(raw_user, user_id=user_id)
@@ -3002,7 +3502,7 @@ class AICore:
             )
             conf = self._clamp(understanding_conf + 0.08, 0.55, 0.9)
             if is_arabic_input:
-                detail = f"هل تقصد: \"{suggested_sentence}\"؟ اكتب نعم للمتابعة أو لا للإبقاء على الصياغة الأصلية."
+                detail = f"Ù‡Ù„ ØªÙ‚ØµØ¯: \"{suggested_sentence}\"ØŸ Ø§ÙƒØªØ¨ Ù†Ø¹Ù… Ù„Ù„Ù…ØªØ§Ø¨Ø¹Ø© Ø£Ùˆ Ù„Ø§ Ù„Ù„Ø¥Ø¨Ù‚Ø§Ø¡ Ø¹Ù„Ù‰ Ø§Ù„ØµÙŠØ§ØºØ© Ø§Ù„Ø£ØµÙ„ÙŠØ©."
             else:
                 detail = (f"Did you mean: \"{suggested_sentence}\"? " "Reply yes to continue, or no to keep your original wording.")
             tone_mode, _ = self._resolve_tone_mode(raw, user_id=user_id)
@@ -3750,6 +4250,9 @@ class AICore:
             }
 
         intent = self._intent(normalized)
+        intent_decomp = self._decompose_intent_plan(normalized, intent)
+        intent = str(intent_decomp.get("intent", intent))
+        decomp_steps = list(intent_decomp.get("steps", []))
         deterministic_candidate = self._deterministic_reasoning_answer(normalized)
         if deterministic_candidate:
             det_intent = str(deterministic_candidate.get("intent", "")).strip().lower()
@@ -4107,6 +4610,9 @@ class AICore:
                         knowledge_focus_overlap = 0.0
                         path_steps = ["Search policy blocked web lookup due low-value query pattern.", "Requested clarification."]
 
+        if decomp_steps:
+            path_steps = decomp_steps + path_steps
+
         if (
             intent in {"knowledge", "problem_solving"}
             and str(base_answer or "").strip()
@@ -4174,6 +4680,29 @@ class AICore:
             path_steps.extend(critique_notes[:4])
 
         if intent in {"knowledge", "problem_solving"}:
+            (
+                base_answer,
+                refs,
+                base_conf,
+                knowledge_relevance,
+                knowledge_focus_overlap,
+                auto_notes,
+            ) = self._autonomy_refinement_loop(
+                query=normalized,
+                topic=topic,
+                intent=intent,
+                answer=base_answer,
+                references=refs,
+                confidence=base_conf,
+                relevance=knowledge_relevance,
+                focus_overlap=knowledge_focus_overlap,
+                internal_candidate=internal_candidate if isinstance(internal_candidate, dict) else None,
+                should_search_web=should_search_web,
+                planned_variants=planned_variants,
+                strict_fact_check=strict_fact_check,
+                user_id=user_id,
+            )
+            path_steps.extend(auto_notes[:4])
             path_steps.append(
                 f"Query planner route: {plan.get('route', 'default')} | web_allowed={str(bool(plan.get('allow_web', True))).lower()}."
             )
@@ -4247,6 +4776,19 @@ class AICore:
             self.memory.update_topic_stats(topic, "likely_correct", user_id=user_id)
         elif outcome == "likely_incorrect":
             self.memory.update_topic_stats(topic, "likely_incorrect", user_id=user_id)
+
+        autonomy_review_notes = self._autonomy_post_task_review(
+            topic=topic,
+            intent=intent,
+            confidence=final_conf,
+            understanding_conf=understanding_conf,
+            route=str(plan.get("route", "default")),
+            correction_count=int(correction_count),
+            user_id=user_id,
+        )
+        if autonomy_review_notes:
+            reflection_steps.extend(autonomy_review_notes[:3])
+
         self.memory.record_experience(session_id, raw, final_answer, intent, final_conf, refs, user_id=user_id)
         self.memory.append_message(session_id, "assistant", final_answer, user_id=user_id)
         self._update_graph_from_text(normalized, reflected_answer, user_id=user_id)
@@ -4282,3 +4824,8 @@ class AICore:
             "topic": topic,
             "related_concepts": self.memory.graph_neighbors(topic, limit=4, user_id=user_id),
         }
+
+
+
+
+

@@ -1,4 +1,4 @@
-function resolveApiBase() {
+﻿function resolveApiBase() {
   const defaultHostedApi = "https://asserk-asseri.hf.space";
   const isGitHubPages =
     window.location.hostname === "asserkdev.github.io" &&
@@ -104,6 +104,7 @@ const ui = {
   profileBtn: document.getElementById("profileBtn"),
   pinsBtn: document.getElementById("pinsBtn"),
   tagsBtn: document.getElementById("tagsBtn"),
+  goalsBtn: document.getElementById("goalsBtn"),
   searchInput: document.getElementById("searchInput"),
   searchBtn: document.getElementById("searchBtn"),
   profileCard: document.getElementById("profileCard"),
@@ -321,6 +322,7 @@ function setChatEnabled(flag) {
   if (ui.profileBtn) ui.profileBtn.disabled = !flag;
   if (ui.pinsBtn) ui.pinsBtn.disabled = !flag;
   if (ui.tagsBtn) ui.tagsBtn.disabled = !flag;
+  if (ui.goalsBtn) ui.goalsBtn.disabled = !flag;
   if (ui.searchInput) ui.searchInput.disabled = !flag;
   if (ui.searchBtn) ui.searchBtn.disabled = !flag;
   if (ui.chatSendBtn) {
@@ -1106,6 +1108,169 @@ async function setTagsFromPrompt() {
   }
 }
 
+function formatAutonomyGoalLine(goal, index) {
+  const status = String(goal.status || "open").toLowerCase();
+  const priority = String(goal.priority || "normal").toLowerCase();
+  const count = Math.max(1, Number(goal.count || 1));
+  const id = String(goal.id || "").trim();
+  const title = String(goal.title || "").trim() || "(untitled goal)";
+  const trigger = String(goal.trigger || "").trim();
+  const triggerPart = trigger ? ` | trigger: ${trigger}` : "";
+  return `${index + 1}. [${status}/${priority}] ${title} (id: ${id}, seen: ${count})${triggerPart}`;
+}
+
+async function showAutonomyGoals() {
+  if (!state.authToken) {
+    renderMessage("assistant", "Please sign in first.");
+    return [];
+  }
+  setStatus("Loading autonomy goals...");
+  setLoading(true);
+  try {
+    const [goalsPayload, capsPayload, planPayload] = await Promise.all([
+      api.json("/api/autonomy/goals", { headers: authHeaders() }),
+      api.json("/api/autonomy/capabilities", { headers: authHeaders() }),
+      api.json("/api/autonomy/self-upgrade-plan", { headers: authHeaders() }),
+    ]);
+    const goals = Array.isArray(goalsPayload.goals) ? goalsPayload.goals : [];
+    const caps = (capsPayload && capsPayload.capabilities) || {};
+    const longRunning = Boolean(caps.long_running_tasks && caps.long_running_tasks.enabled);
+    const selfUpgrade = Boolean(caps.self_upgrading_code && caps.self_upgrading_code.enabled);
+    const independent = Boolean(caps.independent_decisions && caps.independent_decisions.enabled);
+    const plan = (planPayload && planPayload.plan) || {};
+    const planItems = Array.isArray(plan.items) ? plan.items : [];
+    const lines = [
+      "Autonomy capability status:",
+      `- Long-running tasks: ${longRunning ? "Yes" : "No"}`,
+      `- Self-upgrading code: ${selfUpgrade ? "Yes" : "No"}`,
+      `- Independent decisions: ${independent ? "Yes" : "Yes (bounded by safety checks)"}`,
+      "",
+      goals.length ? `Autonomy goals (${goals.length}):` : "No autonomy goals yet.",
+    ];
+    for (let i = 0; i < goals.length; i += 1) {
+      lines.push(formatAutonomyGoalLine(goals[i], i));
+    }
+    lines.push("");
+    lines.push(`Self-upgrade planning: ${selfUpgrade ? "active" : "plan-only (safe mode)"}`);
+    if (planItems.length) {
+      lines.push("Top upgrade plan items:");
+      for (const item of planItems.slice(0, 3)) {
+        lines.push(`- [${item.priority}] ${item.title} (complexity ${item.estimated_complexity})`);
+      }
+    }
+    lines.push("", "Manage goals: add | open <id> | progress <id> | done <id> | block <id> | delete <id> | clear | run");
+    renderMessage("assistant", lines.join("\n"), [{ title: "Autonomy Goals", url: "internal://autonomy-goals" }], {
+      timestamp: new Date().toISOString(),
+    });
+    return goals;
+  } catch (error) {
+    renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+    return [];
+  } finally {
+    setLoading(false);
+    setStatus("Ready");
+  }
+}
+
+async function manageAutonomyGoals() {
+  await showAutonomyGoals();
+  if (!state.authToken) {
+    return;
+  }
+  const raw = window.prompt(
+    "Goals action (optional): add | open <id> | progress <id> | done <id> | block <id> | delete <id> | clear | run",
+    ""
+  );
+  if (raw === null) {
+    return;
+  }
+  const text = String(raw || "").trim();
+  if (!text) {
+    return;
+  }
+  const parts = text.split(/\s+/).filter(Boolean);
+  const action = (parts.shift() || "").toLowerCase();
+  const id = (parts.shift() || "").toLowerCase();
+  const statusMap = {
+    open: "open",
+    progress: "in_progress",
+    doing: "in_progress",
+    done: "done",
+    block: "blocked",
+    blocked: "blocked",
+  };
+
+  setStatus("Updating autonomy goals...");
+  setLoading(true);
+  try {
+    if (action === "add") {
+      const title = window.prompt("Goal title:", "");
+      if (!title || !title.trim()) {
+        setStatus("Goal add canceled.");
+        return;
+      }
+      const priority = (window.prompt("Priority (low|normal|high):", "normal") || "normal").trim().toLowerCase();
+      const trigger = (window.prompt("Trigger or reason (optional):", "") || "").trim();
+      await api.json("/api/autonomy/goals", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ title: title.trim(), trigger, priority }),
+      });
+    } else if (action === "delete") {
+      if (!id) {
+        throw new Error("Provide a goal id. Example: delete improve-low-confidence-handling");
+      }
+      await api.json(`/api/autonomy/goals/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+    } else if (action === "clear") {
+      const confirmClear = window.confirm("Delete all autonomy goals?");
+      if (!confirmClear) {
+        setStatus("Clear canceled.");
+        return;
+      }
+      await api.json("/api/autonomy/goals", {
+        method: "DELETE",
+        headers: authHeaders(),
+      });
+    } else if (action === "run") {
+      const stepsRaw = window.prompt("Max steps for this autonomy run (1-20):", "6") || "6";
+      const maxSteps = Math.max(1, Math.min(20, Number.parseInt(stepsRaw, 10) || 6));
+      const payload = await api.json("/api/autonomy/goals/run", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ max_steps: maxSteps }),
+      });
+      const report = (payload && payload.report) || {};
+      renderMessage(
+        "assistant",
+        `Autonomy run complete. Processed: ${Number(report.processed_count || 0)} | Remaining open: ${Number(report.remaining_open || 0)}.`,
+        [{ title: "Autonomy Goal Runner", url: "internal://autonomy-run" }],
+        { timestamp: new Date().toISOString() }
+      );
+    } else if (Object.prototype.hasOwnProperty.call(statusMap, action)) {
+      if (!id) {
+        throw new Error("Provide a goal id. Example: done improve-low-confidence-handling");
+      }
+      await api.json(`/api/autonomy/goals/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ status: statusMap[action] }),
+      });
+    } else {
+      throw new Error(`Unknown goals action: ${action}`);
+    }
+  } catch (error) {
+    renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
+  } finally {
+    setLoading(false);
+    setStatus("Ready");
+  }
+
+  await showAutonomyGoals();
+}
+
 async function showProfile() {
   if (!state.authToken) {
     renderMessage("assistant", "Please sign in first.");
@@ -1230,6 +1395,7 @@ async function handleSlashCommand(rawText) {
         "/search <text>",
         "/pins",
         "/tags [comma,separated]",
+        "/goals",
         "/mode [simple|standard|advanced]",
         "/tone [formal|friendly|casual|chill|direct]",
         "/delete",
@@ -1286,6 +1452,10 @@ async function handleSlashCommand(rawText) {
     } catch (error) {
       renderMessage("assistant", `Error: ${error.message}`, [], { timestamp: new Date().toISOString() });
     }
+    return true;
+  }
+  if (cmd === "goals") {
+    await manageAutonomyGoals();
     return true;
   }
   if (cmd === "mode") {
@@ -1433,6 +1603,12 @@ if (ui.pinsBtn) {
 if (ui.tagsBtn) {
   ui.tagsBtn.addEventListener("click", async () => {
     await setTagsFromPrompt();
+  });
+}
+
+if (ui.goalsBtn) {
+  ui.goalsBtn.addEventListener("click", async () => {
+    await manageAutonomyGoals();
   });
 }
 
@@ -1613,6 +1789,18 @@ async function boot() {
 }
 
 boot();
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

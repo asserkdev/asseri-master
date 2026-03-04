@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import sys
@@ -73,6 +73,7 @@ def _run_api_suite() -> dict[str, Any]:
 
         token = ""
         session_id = ""
+        goal_id = ""
         auth_headers: dict[str, str] = {}
 
         try:
@@ -90,6 +91,13 @@ def _run_api_suite() -> dict[str, Any]:
 
         calls: list[tuple[str, str, str, dict[str, Any] | None]] = [
             ("auth_me", "GET", "/api/auth/me", None),
+            ("autonomy_caps", "GET", "/api/autonomy/capabilities", None),
+            ("autonomy_goal_add", "POST", "/api/autonomy/goals", {"title": "Improve smoke validation coverage", "trigger": "smoke", "priority": "normal"}),
+            ("autonomy_goals_list", "GET", "/api/autonomy/goals", None),
+            ("autonomy_goal_run", "POST", "/api/autonomy/goals/run", {"max_steps": 3}),
+            ("autonomy_goal_done", "PATCH", "", {"status": "done"}),
+            ("autonomy_upgrade_plan", "GET", "/api/autonomy/self-upgrade-plan", None),
+            ("autonomy_goal_delete", "DELETE", "", None),
             ("chat_hi", "POST", "/api/chat", {"message": "hi", "session_id": None}),
             ("chat_math", "POST", "/api/chat", None),
             ("chat_tone", "POST", "/api/chat", None),
@@ -112,17 +120,66 @@ def _run_api_suite() -> dict[str, Any]:
                     path = f"/api/sessions/{session_id}/search?q=4+24"
                 if name == "chat_feedback" and session_id:
                     body = {"session_id": session_id, "signal": "up"}
+                if name in {"autonomy_goal_done", "autonomy_goal_delete"} and goal_id:
+                    path = f"/api/autonomy/goals/{goal_id}"
 
                 if method == "GET":
                     resp = client.get(path, headers=auth_headers)
-                else:
+                elif method == "POST":
                     resp = client.post(path, headers=auth_headers, json=body)
+                elif method == "PATCH":
+                    resp = client.patch(path, headers=auth_headers, json=body)
+                elif method == "DELETE":
+                    resp = client.delete(path, headers=auth_headers)
+                else:
+                    _step(name, False, f"unsupported method={method}")
+                    continue
 
                 if resp.status_code != 200:
                     _step(name, False, f"status={resp.status_code} body={resp.text[:200]}")
                     continue
 
                 data = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
+                if name == "autonomy_caps":
+                    caps = data.get("capabilities", {}) if isinstance(data, dict) else {}
+                    ok = bool(caps) and "autonomy_loop" in caps and "independent_decisions" in caps
+                    _step(name, ok, f"keys={sorted(list(caps.keys())) if isinstance(caps, dict) else []}")
+                    continue
+                if name == "autonomy_goal_add":
+                    goal = data.get("goal", {}) if isinstance(data, dict) else {}
+                    goal_id = str(goal.get("id", "")).strip()
+                    ok = bool(goal_id) and str(goal.get("status", "")).lower() == "open"
+                    _step(name, ok, f"goal_id={goal_id or 'none'}")
+                    continue
+                if name == "autonomy_goals_list":
+                    goals = data.get("goals", []) if isinstance(data, dict) else []
+                    ids = {str(g.get("id", "")).strip() for g in goals if isinstance(g, dict)} if isinstance(goals, list) else set()
+                    ok = bool(goal_id) and goal_id in ids
+                    _step(name, ok, f"count={len(goals) if isinstance(goals, list) else 0}")
+                    continue
+                if name == "autonomy_goal_run":
+                    report = data.get("report", {}) if isinstance(data, dict) else {}
+                    processed = int(report.get("processed_count", 0)) if isinstance(report, dict) else 0
+                    remaining = int(report.get("remaining_open", 0)) if isinstance(report, dict) else -1
+                    ok = isinstance(report, dict) and processed >= 1 and remaining >= 0
+                    _step(name, ok, f"processed={processed} remaining={remaining}")
+                    continue
+                if name == "autonomy_goal_done":
+                    goal = data.get("goal", {}) if isinstance(data, dict) else {}
+                    ok = str(goal.get("status", "")).lower() == "done"
+                    _step(name, ok, f"status={goal.get('status', '')}")
+                    continue
+                if name == "autonomy_upgrade_plan":
+                    plan = data.get("plan", {}) if isinstance(data, dict) else {}
+                    items = plan.get("items", []) if isinstance(plan, dict) else []
+                    ok = isinstance(plan, dict) and isinstance(items, list) and "safe_to_autodeploy" in plan
+                    _step(name, ok, f"items={len(items) if isinstance(items, list) else 0}")
+                    continue
+                if name == "autonomy_goal_delete":
+                    deleted_id = str(data.get("deleted_goal_id", "")).strip() if isinstance(data, dict) else ""
+                    ok = bool(data.get("ok")) and bool(deleted_id)
+                    _step(name, ok, f"deleted={deleted_id or 'none'}")
+                    continue
                 if name == "chat_hi":
                     session_id = str(data.get("session_id", "")).strip()
                     _step(name, bool(session_id), _first_line(data.get("answer", "")))
@@ -345,3 +402,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+

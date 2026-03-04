@@ -308,6 +308,28 @@ class FuzzyMatcher:
             "slove": "solve",
             "solv": "solve",
             "ariplane": "airplane",
+            "defenition": "definition",
+            "defination": "definition",
+            "meanig": "meaning",
+            "becuse": "because",
+            "becuase": "because",
+            "wich": "which",
+            "wiche": "which",
+            "quesion": "question",
+            "anser": "answer",
+            "answr": "answer",
+            "thier": "their",
+            "recieve": "receive",
+            "langauge": "language",
+            "engish": "english",
+            "seach": "search",
+            "resut": "result",
+            "resluts": "results",
+            "intention": "intent",
+            "differnce": "difference",
+            "sumarry": "summary",
+            "paragragh": "paragraph",
+            "airplaine": "airplane",
         }
         self.uncertain_typo_map = {
             "gogg": "google",
@@ -368,6 +390,28 @@ class FuzzyMatcher:
             "slove": "solve",
             "solv": "solve",
             "ariplane": "airplane",
+            "defenition": "definition",
+            "defination": "definition",
+            "meanig": "meaning",
+            "becuse": "because",
+            "becuase": "because",
+            "wich": "which",
+            "wiche": "which",
+            "quesion": "question",
+            "anser": "answer",
+            "answr": "answer",
+            "thier": "their",
+            "recieve": "receive",
+            "langauge": "language",
+            "engish": "english",
+            "seach": "search",
+            "resut": "result",
+            "resluts": "results",
+            "intention": "intent",
+            "differnce": "difference",
+            "sumarry": "summary",
+            "paragragh": "paragraph",
+            "airplaine": "airplane",
         }
         for wrong, right in corrections.items():
             out = re.sub(rf"\b{re.escape(wrong)}\b", right, out)
@@ -551,3 +595,4 @@ class FuzzyMatcher:
     def normalize_text(self, text: str) -> tuple[str, list[dict[str, str]]]:
         analysis = self.analyze_text(text)
         return str(analysis["normalized"]), list(analysis["corrections"])
+

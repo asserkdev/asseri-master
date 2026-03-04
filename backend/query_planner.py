@@ -9,8 +9,31 @@ class QueryPlanner:
 
     @staticmethod
     def _tokens(text: str) -> list[str]:
-        pattern = r"[a-z0-9\u0600-\u06FF]+"
+        pattern = r"[a-z0-9]+"
         return [t for t in re.findall(pattern, str(text or "").lower()) if t]
+
+    @staticmethod
+    def _has_explicit_request(query: str) -> bool:
+        q = re.sub(r"\s+", " ", str(query or "").strip().lower())
+        if not q:
+            return False
+
+        if q.endswith("?"):
+            return True
+
+        if re.search(
+            r"\b(what|who|where|when|why|how|which|define|explain|compare|summarize|list|give|show|solve|prove|write|create|design)\b",
+            q,
+        ):
+            return True
+
+        if re.search(r"\b(in|with)\s+\d+\s+(points?|steps?|examples?|sources?)\b", q):
+            return True
+
+        if re.search(r"\d\s*[-+*/=^()]\s*\d", q):
+            return True
+
+        return False
 
     @staticmethod
     def _is_vague(query: str) -> bool:
@@ -18,6 +41,7 @@ class QueryPlanner:
         tokens = QueryPlanner._tokens(q)
         if len(tokens) <= 1:
             return True
+
         vague_set = {
             "it",
             "this",
@@ -28,16 +52,18 @@ class QueryPlanner:
             "anything",
             "there",
             "here",
-            "هذا",
-            "هذه",
-            "ذلك",
-            "شيء",
-            "حاجة",
-            "هناك",
-            "هنا",
         }
+
+        non_vague = [t for t in tokens if t not in vague_set and len(t) > 2]
+        if len(non_vague) >= 2:
+            return False
+
+        if QueryPlanner._has_explicit_request(q) and len(non_vague) >= 1:
+            return False
+
         if len(tokens) <= 3 and all(t in vague_set or len(t) <= 2 for t in tokens):
             return True
+
         return False
 
     @staticmethod
@@ -54,12 +80,8 @@ class QueryPlanner:
             "this month",
             "sources",
             "references",
-            "احدث",
-            "اليوم",
-            "اخبار",
-            "حاليا",
-            "مصادر",
-            "مراجع",
+            "official source",
+            "trusted source",
         }
         return any(m in q for m in markers)
 
@@ -67,7 +89,17 @@ class QueryPlanner:
     def _query_complexity(query: str) -> str:
         tokens = QueryPlanner._tokens(query)
         q = str(query or "").lower()
-        if len(tokens) >= 18 or any(k in q for k in ["compare", "analyze", "prove", "derive", "step by step", "قارن", "حلل", "اثبت", "اشرح خطوة"]):
+        if len(tokens) >= 18 or any(
+            k in q
+            for k in [
+                "compare",
+                "analyze",
+                "prove",
+                "derive",
+                "step by step",
+                "counterexample",
+            ]
+        ):
             return "high"
         if len(tokens) >= 9:
             return "medium"
@@ -88,6 +120,7 @@ class QueryPlanner:
         mistakes = int(stats.get("mistakes", 0))
         complexity = self._query_complexity(query)
         needs_fresh_web = self._needs_fresh_web(query)
+        explicit_request = self._has_explicit_request(query)
         vague = self._is_vague(query)
 
         route = "default"
@@ -97,19 +130,26 @@ class QueryPlanner:
         if intent in {"math", "casual", "feedback", "safety"}:
             route = intent
             allow_web = False
-        elif (understanding_conf < 0.42 and not has_internal_candidate) or vague:
+        elif (understanding_conf < 0.28 and not has_internal_candidate) or (vague and not explicit_request):
             route = "clarify"
             allow_web = False
             request_clarification = True
+        elif has_internal_candidate and understanding_conf >= 0.35:
+            route = "internal_first"
+            allow_web = False
         elif needs_fresh_web:
             route = "web_first"
             allow_web = True
-        elif has_internal_candidate:
-            route = "internal_first"
-            allow_web = False
         elif corrections + mistakes >= 4:
             route = "hybrid_verify"
             allow_web = True
+        elif explicit_request:
+            route = "hybrid"
+            allow_web = True
+        elif understanding_conf < 0.38 and not has_internal_candidate:
+            route = "clarify"
+            allow_web = False
+            request_clarification = True
         else:
             route = "hybrid"
             allow_web = True
@@ -124,6 +164,8 @@ class QueryPlanner:
                 variants = 1
             if needs_fresh_web:
                 variants = max(variants, 3)
+            if explicit_request and not has_internal_candidate:
+                variants = max(variants, 2)
 
         return {
             "route": route,
@@ -132,5 +174,6 @@ class QueryPlanner:
             "search_variants": variants,
             "complexity": complexity,
             "needs_fresh_web": needs_fresh_web,
+            "explicit_request": explicit_request,
             "topic": topic,
         }
